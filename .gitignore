@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+*.egg
+
+# Virtualenvs
+venv/
+.venv/
+env/
+.env
+.env.*
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Sensitive
+.resend_key
+secrets/
+*.key
+novablock/_keys.py

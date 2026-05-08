@@ -1,0 +1,135 @@
+"""Active window monitor: detects browser navigation to adult sites and triggers
+the block popup. Runs as a low-priority background thread. ~0% CPU at idle."""
+import logging
+import threading
+import time
+from typing import Callable, Optional
+
+try:
+    import win32gui
+    import win32process
+    import psutil
+    HAS_WIN32 = True
+except ImportError:
+    HAS_WIN32 = False
+
+from .paths import BLOCKLIST_CACHE
+
+log = logging.getLogger("novablock.monitor")
+
+BROWSER_PROCS = {
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+    "opera.exe", "vivaldi.exe", "iexplore.exe", "tor.exe",
+}
+
+ADULT_KEYWORDS = [
+    "porn", "xxx", "nsfw", "nude", "naked", "boobs", "tits",
+    "milf", "hentai", "rule34", "onlyfans", "fansly",
+    "cam girl", "camgirl", "stripchat", "chaturbate",
+    "xhamster", "pornhub", "xvideos", "redtube", "youporn",
+    "spankbang", "xnxx", "tube8", "porntrex", "fap",
+    "nudes", "leaked", "anal", "blowjob",
+    "erotic", "erotique", "hardcore", "softcore",
+    # Yandex search engine: known porn-bypass, blocked entirely
+    "yandex", "ya.ru", "yastatic",
+    # Common French queries that surface adult content via search engines
+    "video x ", "film x ", "video porno", "site porno",
+]
+
+
+class WindowMonitor:
+    def __init__(self, on_detect: Callable[[str, str, int], None],
+                 poll_interval: float = 0.5):
+        self.on_detect = on_detect
+        self.poll_interval = poll_interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._last_pid: int = 0
+        self._last_title: str = ""
+        self._cooldown_until: float = 0.0
+        self._domain_keywords: list[str] = []
+        self._load_domains()
+
+    def _load_domains(self) -> None:
+        self._domain_keywords = []
+        if not BLOCKLIST_CACHE.exists():
+            return
+        try:
+            for line in BLOCKLIST_CACHE.read_text(encoding="utf-8", errors="ignore").splitlines()[:5000]:
+                d = line.strip().lower()
+                if not d or "." not in d:
+                    continue
+                base = d.split(".")[0]
+                if len(base) >= 6 and base not in {"www", "static", "media", "cdn"}:
+                    self._domain_keywords.append(base)
+        except Exception as e:
+            log.warning("could not load domain keywords: %s", e)
+
+    def start(self) -> None:
+        if not HAS_WIN32:
+            log.warning("win32gui not available, monitor disabled")
+            return
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="NovaBlockMonitor")
+        self._thread.start()
+        log.info("Monitor started")
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=2)
+
+    def _is_browser(self, pid: int) -> bool:
+        try:
+            name = psutil.Process(pid).name().lower()
+            return name in BROWSER_PROCS
+        except Exception:
+            return False
+
+    def _check_title(self, title: str) -> Optional[str]:
+        t = title.lower()
+        for kw in ADULT_KEYWORDS:
+            if kw in t:
+                return kw
+        for d in self._domain_keywords:
+            if d in t:
+                return d
+        return None
+
+    def _loop(self) -> None:
+        """Aggressive: re-triggers popup every 3s as long as a banned title
+        is on screen. User cannot 'browse around' the popup."""
+        while not self._stop.is_set():
+            try:
+                if time.time() < self._cooldown_until:
+                    time.sleep(self.poll_interval)
+                    continue
+                hwnd = win32gui.GetForegroundWindow()
+                if not hwnd:
+                    time.sleep(self.poll_interval)
+                    continue
+                title = win32gui.GetWindowText(hwnd) or ""
+                _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                is_browser = self._is_browser(pid)
+                if not is_browser:
+                    self._last_pid = pid
+                    self._last_title = title
+                    time.sleep(self.poll_interval)
+                    continue
+                hit = self._check_title(title)
+                if hit:
+                    log.warning("Adult content detected: %r (matched %r) hwnd=%s", title, hit, hwnd)
+                    # Short cooldown to avoid spawning 100 popups but ensure
+                    # popup re-triggers every 3s while user stays on banned page.
+                    self._cooldown_until = time.time() + 3.0
+                    try:
+                        self.on_detect(title, hit, hwnd)
+                    except Exception as e:
+                        log.error("on_detect callback failed: %s", e)
+                self._last_pid = pid
+                self._last_title = title
+            except Exception as e:
+                log.debug("monitor loop error: %s", e)
+            time.sleep(self.poll_interval)
