@@ -72,6 +72,35 @@ FAMILY_DNS_PRIMARY = "1.1.1.3"
 FAMILY_DNS_SECONDARY = "1.0.0.3"
 
 
+# DNS-level SafeSearch enforcement.
+# Maps the public hostname → the Google/YouTube/Bing-provided "safe variant" IP.
+# Works for ALL browsers (Firefox, Edge, Chrome, Brave, etc.) because the DNS
+# resolver (system → hosts file) returns the safe IP before the browser even
+# tries to load the real one.
+SAFESEARCH_HOSTS_MAP = [
+    # Google SafeSearch — forcesafesearch.google.com
+    ("www.google.com", "216.239.38.120"),
+    ("google.com", "216.239.38.120"),
+    ("www.google.fr", "216.239.38.120"),
+    ("google.fr", "216.239.38.120"),
+    ("www.google.co.uk", "216.239.38.120"),
+    ("google.co.uk", "216.239.38.120"),
+    ("www.google.de", "216.239.38.120"),
+    ("google.de", "216.239.38.120"),
+    # YouTube Restricted Mode (Moderate) — restrictmoderate.youtube.com
+    ("www.youtube.com", "216.239.38.119"),
+    ("m.youtube.com", "216.239.38.119"),
+    ("youtubei.googleapis.com", "216.239.38.119"),
+    ("youtube.googleapis.com", "216.239.38.119"),
+    # Bing SafeSearch (strict) — strict.bing.com
+    ("www.bing.com", "204.79.197.220"),
+    ("bing.com", "204.79.197.220"),
+    # Note: DuckDuckGo and Yandex have no DNS-level safesearch.
+    # DDG: not a problem (no image/video porn surfacing).
+    # Yandex: blocked entirely via EXTRA_DOMAINS.
+]
+
+
 def is_admin() -> bool:
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
@@ -165,6 +194,15 @@ def _strip_block(content: str) -> str:
 def _build_block(domains: list[str]) -> str:
     seen: set[str] = set()
     out = [BLOCK_MARKER_START]
+    # SafeSearch redirects (specific IP, not 0.0.0.0) — at the top so they take precedence
+    out.append("# SafeSearch enforcement (DNS-level, all browsers)")
+    for host, ip in SAFESEARCH_HOSTS_MAP:
+        if not ip or "." not in ip:
+            continue
+        out.append(f"{ip} {host}")
+        seen.add(host)
+    out.append("")
+    out.append("# Adult content blocklist (StevenBlack + custom)")
     for d in domains:
         d = d.strip().lower()
         if not d or d in seen or "." not in d:

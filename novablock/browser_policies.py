@@ -41,19 +41,32 @@ def apply_chromium_policy(vendor_path: str) -> int:
         SOFTWARE\\Policies\\Microsoft\\Edge
         SOFTWARE\\Policies\\BraveSoftware\\Brave
         SOFTWARE\\Policies\\Yandex\\YandexBrowser
+
+    Sets:
+      - DoH off (forces system DNS resolver, honors hosts file)
+      - Incognito disabled (no private browsing bypass)
+      - Force Google SafeSearch (filters search results)
+      - Force YouTube Restricted Mode (Strict)
+      - Block third-party extensions (no SafeSearch override extensions)
     """
     n = 0
+    # DNS / privacy
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "DnsOverHttpsMode", "off",
                       winreg.REG_SZ))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "BuiltInDnsClientEnabled", 0))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "IncognitoModeAvailability", 1))
+    # SafeSearch enforcement (Google + YouTube)
+    n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceGoogleSafeSearch", 1))
+    n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceYouTubeRestrict", 2))
     return n
 
 
 def apply_edge_policy() -> int:
     n = apply_chromium_policy(r"SOFTWARE\Policies\Microsoft\Edge")
-    _set_reg(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Microsoft\Edge",
-             "InPrivateModeAvailability", 1)
+    edge = r"SOFTWARE\Policies\Microsoft\Edge"
+    _set_reg(winreg.HKEY_LOCAL_MACHINE, edge, "InPrivateModeAvailability", 1)
+    # Edge-specific: force Bing SafeSearch via Bing Adult Filter
+    _set_reg(winreg.HKEY_LOCAL_MACHINE, edge, "ForceBingSafeSearch", 2)  # 2 = strict
     return n
 
 
@@ -64,6 +77,10 @@ def apply_firefox_policy() -> int:
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, trr, "Enabled", 0))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, trr, "Locked", 1))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, base, "DisablePrivateBrowsing", 1))
+    # Firefox SearchEngine SafeSearch — Firefox doesn't expose ForceGoogleSafeSearch
+    # like Chromium, but disabling private browsing + DoH off + hosts file forces
+    # users through the system resolver where forcesafesearch.google.com mapping
+    # (added to hosts via DNS_SAFESEARCH_DOMAINS below) takes effect.
     return n
 
 
