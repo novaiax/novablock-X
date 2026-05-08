@@ -45,13 +45,26 @@ def _send(api_key: str, from_email: str, to: str, subject: str, html: str) -> bo
 
 
 def send_setup_email(api_key: str, from_email: str, friend_email: str,
-                     friend_name: str, user_name: str, code: str) -> bool:
-    subject = f"{user_name} a besoin de ton aide — code à conserver"
+                     friend_name: str, user_name: str, code: str,
+                     machine_name: str = "") -> bool:
+    label = f"{user_name}" + (f" — {machine_name}" if machine_name else "")
+    subject = f"[{machine_name}] {user_name} a besoin de ton aide — code à conserver" if machine_name \
+              else f"{user_name} a besoin de ton aide — code à conserver"
+    machine_html = ""
+    if machine_name:
+        machine_html = (f'<p style="background:#dfe6e9;padding:10px;border-radius:6px;'
+                        f'font-size:14px;margin:16px 0 0 0;color:#2d3436;">'
+                        f'📍 <strong>Machine :</strong> {machine_name}<br>'
+                        f'<small style="color:#636e72">'
+                        f'(Si {user_name} a installé NovaBlock sur plusieurs machines, chaque '
+                        f'machine a son propre code. Ce code-ci est pour <strong>{machine_name}</strong>.)'
+                        f'</small></p>')
     html = f"""
     <div style="font-family: -apple-system, system-ui, sans-serif; max-width: 620px; margin: 0 auto; padding: 24px; color: #1a1a1a; line-height: 1.6;">
 
       <h2 style="color: #d63031; margin-bottom: 4px;">Salut {friend_name} 👋</h2>
       <p style="color: #636e72; margin-top: 0;">Tu reçois cet email parce que <strong>{user_name}</strong> t'a choisi(e) comme personne de confiance.</p>
+      {machine_html}
 
       <h3 style="color: #2d3436; margin-top: 28px;">📖 Ce qui se passe, en 30 secondes</h3>
       <p>{user_name} veut <strong>arrêter de regarder du contenu pornographique</strong>. Pour s'aider lui/elle-même, il/elle vient d'installer <strong>NovaBlock</strong>, un logiciel qui bloque ce type de contenu sur son ordinateur.</p>
@@ -127,10 +140,17 @@ def send_unlock_request(api_key: str, from_email: str, friend_email: str,
                         friend_name: str, user_name: str,
                         count_week: int, count_total: int,
                         code: str = "",
-                        context: str = "") -> bool:
+                        context: str = "",
+                        machine_name: str = "") -> bool:
     when = datetime.now().strftime("%d/%m/%Y à %H:%M")
-    subject = f"🚨 {user_name} demande à débloquer NovaBlock"
+    machine_tag = f"[{machine_name}] " if machine_name else ""
+    subject = f"🚨 {machine_tag}{user_name} demande à débloquer NovaBlock"
     ctx_html = f"<p><strong>Contexte :</strong> {context}</p>" if context else ""
+    machine_html = ""
+    if machine_name:
+        machine_html = (f'<p style="background:#dfe6e9;padding:8px;border-radius:4px;'
+                        f'font-size:13px;margin:12px 0 0 0;color:#2d3436;">'
+                        f'📍 Machine : <strong>{machine_name}</strong></p>')
     code_block = ""
     if code:
         code_block = f"""
@@ -144,6 +164,7 @@ def send_unlock_request(api_key: str, from_email: str, friend_email: str,
       <h2 style="color: #d63031;">🚨 Demande de déblocage</h2>
       <p>Salut {friend_name},</p>
       <p><strong>{user_name} essaie d'accéder à du contenu pornographique</strong> et vient de cliquer sur "Demander le code".</p>
+      {machine_html}
       {ctx_html}
       <div style="background: #ffe9e9; border-left: 4px solid #d63031; padding: 16px; margin: 16px 0; border-radius: 6px;">
         <p style="margin: 4px 0;"><strong>Quand :</strong> {when}</p>
@@ -162,13 +183,17 @@ def send_unlock_request(api_key: str, from_email: str, friend_email: str,
 
 
 def send_uninstall_request(api_key: str, from_email: str, friend_email: str,
-                           friend_name: str, user_name: str) -> bool:
-    subject = f"⚠️ {user_name} a lancé la désinstallation de NovaBlock (cooldown 7j)"
+                           friend_name: str, user_name: str,
+                           machine_name: str = "") -> bool:
+    machine_tag = f"[{machine_name}] " if machine_name else ""
+    subject = f"⚠️ {machine_tag}{user_name} a lancé la désinstallation de NovaBlock (cooldown 7j)"
+    machine_line = f"<p><strong>Machine :</strong> {machine_name}</p>" if machine_name else ""
     html = f"""
     <div style="font-family: -apple-system, system-ui, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1a1a1a;">
       <h2 style="color: #d63031;">⚠️ Désinstallation lancée</h2>
       <p>Salut {friend_name},</p>
       <p><strong>{user_name} a cliqué sur "Désinstaller NovaBlock"</strong>. Cooldown 7 jours en cours.</p>
+      {machine_line}
       <p>Pendant 7 jours le filtre reste actif. À la fin {user_name} devra entrer le code que tu as pour finaliser.</p>
       <p>S'il/elle te recontacte rapidement pour le code, demande-toi pourquoi il/elle veut tout retirer plutôt qu'un déblocage 24h.</p>
       <p style="color: #636e72; font-size: 13px; margin-top: 32px;">

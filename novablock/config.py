@@ -24,6 +24,7 @@ DEFAULTS: dict[str, Any] = {
     "code_rotation_ts": 0,
     "code_rotation_days": 7,
     "custom_blocked_domains": [],
+    "machine_name": "",
 }
 
 

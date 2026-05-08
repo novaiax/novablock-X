@@ -1,4 +1,5 @@
 """Tkinter GUI: setup wizard, status window, blocked-site popup, unlock dialog."""
+import ctypes
 import logging
 import threading
 import time
@@ -13,21 +14,64 @@ from . import config, crypto, mailer, blocker, persistence
 
 log = logging.getLogger("novablock.gui")
 
+
+def enable_dpi_awareness() -> None:
+    """Make Tkinter use the actual display resolution on high-DPI screens.
+    Without this, Windows scales the GUI like an old app and everything is
+    blurry / disproportionate."""
+    try:
+        # Per-Monitor v2 DPI awareness (best, requires Win10 1703+)
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+enable_dpi_awareness()
+
+
+def _scaling_factor() -> float:
+    """Returns the system DPI scaling factor (1.0 at 96 DPI, 1.5 at 144 DPI, etc.)."""
+    try:
+        hdc = ctypes.windll.user32.GetDC(0)
+        dpi_x = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
+        ctypes.windll.user32.ReleaseDC(0, hdc)
+        return max(1.0, dpi_x / 96.0)
+    except Exception:
+        return 1.0
+
+
+_SCALE = _scaling_factor()
+
 PRIMARY = "#d63031"
 ACCENT = "#2d3436"
 BG = "#fafafa"
 MUTED = "#636e72"
 
+# Fonts auto-scale (tk uses points, but on high-DPI screens we still want
+# slightly larger text relative to UI element sizing)
 FONT_LG = ("Segoe UI", 18, "bold")
 FONT_MD = ("Segoe UI", 12)
 FONT_SM = ("Segoe UI", 10)
 FONT_MONO = ("Consolas", 14)
 
 
-def _center(win: tk.Misc, w: int, h: int) -> None:
+def _scaled(px: int) -> int:
+    """Convert a px value (designed at 1.0 scaling) to actual pixels."""
+    return int(px * _SCALE)
+
+
+def _center(win: tk.Misc, w: int, h: int, fit_screen: bool = True) -> None:
+    """Center a window. If fit_screen, scale the requested size by the DPI
+    factor and clamp to 90% of the actual screen so it never overflows."""
     win.update_idletasks()
     sw = win.winfo_screenwidth()
     sh = win.winfo_screenheight()
+    if fit_screen:
+        w = min(int(w * _SCALE), int(sw * 0.95))
+        h = min(int(h * _SCALE), int(sh * 0.92))
     x = (sw - w) // 2
     y = (sh - h) // 2
     win.geometry(f"{w}x{h}+{x}+{y}")
@@ -56,15 +100,21 @@ class SetupWizard:
 
     def __init__(self, resend_api_key: str = "",
                  from_email: str = "NovaBlock <onboarding@resend.dev>"):
+        import socket
         self.prefill_api_key = resend_api_key
         self.prefill_from_email = from_email
         self.root = tk.Tk()
         self.root.title("NovaBlock — Installation")
         self.root.configure(bg=BG)
-        _center(self.root, 720, 720)
+        _center(self.root, 720, 740)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.completed = False
         self.step = 1
+
+        try:
+            default_machine = socket.gethostname()
+        except Exception:
+            default_machine = "PC"
 
         self.data = {
             "api_key": resend_api_key,
@@ -72,6 +122,7 @@ class SetupWizard:
             "user_name": "",
             "friend_name": "",
             "friend_email": "",
+            "machine_name": default_machine,
         }
 
         self.container = tk.Frame(self.root, bg=BG)
@@ -303,6 +354,15 @@ class SetupWizard:
                  text="(L'app enverra le code à cet email. Préviens ton ami avant.)",
                  font=("Segoe UI", 9), fg=MUTED, bg=BG).pack(anchor="w")
 
+        tk.Label(form, text="Nom de cette machine :", font=FONT_SM, fg=ACCENT, bg=BG).pack(anchor="w", pady=(12, 2))
+        self.machine_name_e = tk.Entry(form, font=FONT_MD, relief="solid", bd=1)
+        self.machine_name_e.insert(0, self.data["machine_name"])
+        self.machine_name_e.pack(fill="x", ipady=4)
+        tk.Label(form,
+                 text="(Apparaîtra dans tous les emails. Ex: 'PC fixe' / 'Portable'. "
+                      "Utile si tu installes NovaBlock sur plusieurs machines.)",
+                 font=("Segoe UI", 9), fg=MUTED, bg=BG, wraplength=640, justify="left").pack(anchor="w")
+
         # Send test email
         action = tk.Frame(self.container, bg=BG)
         action.pack(fill="x", pady=(14, 0))
@@ -359,15 +419,19 @@ class SetupWizard:
         un = self.user_name_e.get().strip()
         fn = self.friend_name_e.get().strip()
         fe = self.friend_email_e.get().strip()
+        mn = self.machine_name_e.get().strip()
         if not un or not fn:
             messagebox.showerror("Erreur", "Prénoms requis.")
             return
         if "@" not in fe:
             messagebox.showerror("Erreur", "Email de ton ami invalide.")
             return
+        if not mn:
+            mn = "PC"
         self.data["user_name"] = un
         self.data["friend_name"] = fn
         self.data["friend_email"] = fe
+        self.data["machine_name"] = mn
         self._next()
 
     # ---------- step 4: review ----------
@@ -383,6 +447,7 @@ class SetupWizard:
 
         rows = [
             ("Toi", self.data["user_name"]),
+            ("Cette machine", self.data["machine_name"]),
             ("Accountability partner", f"{self.data['friend_name']} ({self.data['friend_email']})"),
             ("Email expéditeur", self.data["from_email"]),
             ("Clé Resend", self.data["api_key"][:8] + "…" + self.data["api_key"][-4:]),
@@ -442,6 +507,7 @@ class SetupWizard:
                 self.data["api_key"], self.data["from_email"],
                 self.data["friend_email"], self.data["friend_name"],
                 self.data["user_name"], code,
+                machine_name=self.data.get("machine_name", ""),
             )
             if not sent:
                 err = mailer.get_last_error()
@@ -459,6 +525,7 @@ class SetupWizard:
                 "user_email": "",
                 "friend_name": self.data["friend_name"],
                 "friend_email": self.data["friend_email"],
+                "machine_name": self.data.get("machine_name", ""),
                 "code_hash": code_hash,
                 "install_ts": int(time.time()),
                 "code_rotation_ts": int(time.time()),
@@ -569,6 +636,13 @@ class StatusWindow:
         )
         self.enter_btn.pack(fill="x", pady=4)
 
+        self.settings_btn = tk.Button(
+            frm, text="⚙  Modifier mes infos",
+            font=FONT_SM, bg="#dfe6e9", fg=ACCENT, relief="flat", padx=12, pady=6,
+            command=self._open_settings,
+        )
+        self.settings_btn.pack(fill="x", pady=(8, 4))
+
         ttk.Separator(frm).pack(fill="x", pady=(12, 8))
         tk.Label(frm, text="Sites bloqués manuellement",
                  font=FONT_SM, fg=ACCENT, bg=BG).pack(anchor="w")
@@ -669,6 +743,7 @@ class StatusWindow:
             cfg.get("user_name", "l'utilisateur"),
             wk, total,
             code=new_code,
+            machine_name=cfg.get("machine_name", ""),
         )
         if ok:
             config.update_code_hash(new_hash)
@@ -710,6 +785,7 @@ class StatusWindow:
             cfg.get("friend_email", ""),
             cfg.get("friend_name", "ami"),
             cfg.get("user_name", "l'utilisateur"),
+            machine_name=cfg.get("machine_name", ""),
         )
         self.feedback_lbl.config(text="Cooldown 7j démarré. Ton ami a été notifié.", fg=MUTED)
         self._refresh()
@@ -718,6 +794,106 @@ class StatusWindow:
         config.cancel_uninstall_cooldown()
         self.feedback_lbl.config(text="Cooldown annulé.", fg=MUTED)
         self._refresh()
+
+    def _open_settings(self) -> None:
+        """Editable settings dialog. All fields editable except friend_email,
+        which requires the unlock code first."""
+        cfg = config.load()
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Mes infos")
+        dlg.configure(bg=BG)
+        _center(dlg, 600, 720)
+        dlg.minsize(560, 680)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        # Header (top)
+        header = tk.Frame(dlg, bg=BG, padx=24, pady=16)
+        header.pack(fill="x", side="top")
+        tk.Label(header, text="Modifier mes infos", font=FONT_LG, fg=PRIMARY, bg=BG).pack(anchor="w")
+        tk.Label(header, text="Modifie librement, sauf l'email de ton ami qui demande le code.",
+                 font=FONT_SM, fg=MUTED, bg=BG).pack(anchor="w")
+
+        # Footer (bottom — packed FIRST after header so buttons are always visible)
+        footer = tk.Frame(dlg, bg=BG, padx=24, pady=16)
+        footer.pack(fill="x", side="bottom")
+        feedback = tk.Label(footer, text="", font=FONT_SM, fg=MUTED, bg=BG, wraplength=540, justify="left")
+        feedback.pack(anchor="w", pady=(0, 8))
+        btns = tk.Frame(footer, bg=BG)
+        btns.pack(fill="x")
+
+        # Content (fills remaining space)
+        wrap = tk.Frame(dlg, bg=BG, padx=24, pady=8)
+        wrap.pack(fill="both", expand=True, side="top")
+
+        fields: dict[str, tk.Entry] = {}
+
+        def _row(label: str, key: str, locked: bool = False, mask: bool = False):
+            tk.Label(wrap, text=label, font=FONT_SM, fg=ACCENT, bg=BG).pack(anchor="w", pady=(8, 2))
+            box = tk.Frame(wrap, bg=BG)
+            box.pack(fill="x")
+            e = tk.Entry(box, font=FONT_MD, relief="solid", bd=1,
+                         show="•" if mask else "")
+            e.insert(0, str(cfg.get(key, "")))
+            e.pack(side="left", fill="x", expand=True, ipady=4)
+            if locked:
+                e.config(state="readonly", readonlybackground="#f0f0f0")
+            fields[key] = e
+            return box
+
+        _row("Ton prénom :", "user_name")
+        _row("Nom de cette machine :", "machine_name")
+        _row("Prénom de ton ami :", "friend_name")
+        friend_box = _row("Email de ton ami (verrouillé — code requis) :",
+                          "friend_email", locked=True)
+
+        # Unlock button next to friend_email
+        unlock_btn = tk.Button(friend_box, text="🔓 Déverrouiller",
+                               font=FONT_SM, bg="#fdcb6e", fg=ACCENT, relief="flat",
+                               padx=10, pady=4)
+        unlock_btn.pack(side="left", padx=(8, 0))
+
+        def _unlock_friend_email():
+            code_dlg = CodeDialog(dlg)
+            dlg.wait_window(code_dlg.top)
+            if not code_dlg.result:
+                return
+            current_cfg = config.load()
+            if not crypto.verify_code(code_dlg.result, current_cfg.get("code_hash", "")):
+                messagebox.showerror("Erreur", "Code incorrect.", parent=dlg)
+                return
+            fields["friend_email"].config(state="normal", readonlybackground="white")
+            unlock_btn.config(state="disabled", text="✓ Déverrouillé")
+
+        unlock_btn.config(command=_unlock_friend_email)
+
+        _row("Clé Resend :", "resend_api_key", mask=True)
+        _row("Email expéditeur :", "from_email")
+
+        def _save():
+            new_cfg = config.load()
+            for key, entry in fields.items():
+                val = entry.get().strip()
+                if key == "friend_email" and "@" not in val:
+                    feedback.config(text="✗ Email de ton ami invalide.", fg=PRIMARY)
+                    return
+                if key == "resend_api_key" and val and not val.startswith("re_"):
+                    feedback.config(text="✗ Clé Resend invalide (doit commencer par re_).", fg=PRIMARY)
+                    return
+                if key == "from_email" and "@" not in val:
+                    feedback.config(text="✗ Email expéditeur invalide.", fg=PRIMARY)
+                    return
+                if val:
+                    new_cfg[key] = val
+            config.save(new_cfg)
+            feedback.config(text="✓ Infos mises à jour.", fg="#00b894")
+            dlg.after(800, dlg.destroy)
+            self._refresh()
+
+        tk.Button(btns, text="Enregistrer", font=FONT_MD, bg=PRIMARY, fg="white",
+                  relief="flat", padx=20, pady=8, command=_save).pack(side="right")
+        tk.Button(btns, text="Annuler", font=FONT_MD, bg="#ddd", fg=ACCENT,
+                  relief="flat", padx=14, pady=8, command=dlg.destroy).pack(side="right", padx=(0, 8))
 
     def _add_custom_site(self) -> None:
         dlg = tk.Toplevel(self.root)
@@ -1076,6 +1252,7 @@ class BlockedPopup:
             wk, total,
             code=new_code,
             context=f"Tentative d'accès à un site contenant : « {self.keyword} »",
+            machine_name=cfg.get("machine_name", ""),
         )
         if ok:
             config.update_code_hash(new_hash)
