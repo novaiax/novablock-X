@@ -17,8 +17,10 @@ env/
 
 # PyInstaller
 build/
+build-staging/
 dist/
 dist-release/
+dist-staging/
 *.spec.bak
 
 # Editor

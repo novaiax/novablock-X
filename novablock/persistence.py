@@ -1,6 +1,7 @@
 """Persistence layer: scheduled task + service registration so NovaBlock
 relaunches automatically and resists kills. Run as admin."""
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -147,3 +148,71 @@ def remove_startup_registry() -> bool:
     except Exception as e:
         log.warning("registry cleanup failed: %s", e)
         return False
+
+
+def _common_startup_dir() -> Path:
+    return (
+        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    )
+
+
+def _user_startup_dir() -> Path:
+    return (
+        Path(os.environ.get("APPDATA", ""))
+        / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    )
+
+
+def _shortcut_path(common: bool) -> Path:
+    base = _common_startup_dir() if common else _user_startup_dir()
+    return base / "NovaBlock.lnk"
+
+
+def add_startup_shortcut() -> bool:
+    """Third persistence layer (after scheduled task + HKLM\\Run): a .lnk in the
+    All Users Startup folder so the app launches at every logon even if the
+    other two are tampered with. Falls back to the per-user Startup folder if
+    All Users is not writable."""
+    try:
+        import win32com.client  # type: ignore
+    except ImportError:
+        log.warning("pywin32 missing — cannot create startup shortcut")
+        return False
+
+    target = str(exe_path())
+    workdir = str(Path(exe_path()).parent)
+
+    for common in (True, False):
+        try:
+            sc = _shortcut_path(common=common)
+            sc.parent.mkdir(parents=True, exist_ok=True)
+            shell = win32com.client.Dispatch("WScript.Shell")
+            link = shell.CreateShortCut(str(sc))
+            link.Targetpath = target
+            link.WorkingDirectory = workdir
+            link.Description = "NovaBlock — Adult content blocker"
+            link.Save()
+            log.info("Startup shortcut created at %s", sc)
+            return True
+        except Exception as e:
+            log.warning("startup shortcut (common=%s) failed: %s", common, e)
+            continue
+    return False
+
+
+def remove_startup_shortcut() -> bool:
+    ok = True
+    for common in (True, False):
+        try:
+            sc = _shortcut_path(common=common)
+            if sc.exists():
+                sc.unlink()
+        except Exception as e:
+            log.warning("startup shortcut removal (common=%s) failed: %s", common, e)
+            ok = False
+    return ok
+
+
+def startup_shortcut_present() -> bool:
+    return _shortcut_path(common=True).exists() or _shortcut_path(common=False).exists()

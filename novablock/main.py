@@ -61,9 +61,10 @@ def run_setup() -> bool:
 
 
 def ensure_persistence() -> None:
-    """At every launch, make sure the scheduled task and registry persistence
-    point to the CURRENT exe path. This makes in-place updates seamless:
-    overwrite the .exe, relaunch, and persistence is auto-refreshed."""
+    """At every launch, make sure the scheduled task, registry, and Startup
+    shortcut all point to the CURRENT exe path. Three layers so a missing or
+    tampered one doesn't kill autostart. In-place updates: overwrite the .exe,
+    relaunch, and all three are auto-refreshed."""
     log = logging.getLogger("novablock.persistence_check")
     try:
         if not persistence.task_exists():
@@ -75,6 +76,7 @@ def ensure_persistence() -> None:
             persistence.install_scheduled_task()
             log.info("Scheduled task refreshed to current exe path")
         persistence.add_startup_registry()
+        persistence.add_startup_shortcut()
     except Exception as e:
         log.warning("ensure_persistence: %s", e)
 
@@ -138,7 +140,9 @@ def run_app() -> None:
 
 
 def run_watchdog_headless() -> None:
-    """Called by scheduled task. Just ensures block is in place and exits."""
+    """Called by scheduled task. Ensures block is in place AND repairs missing
+    persistence layers (registry Run key, Startup shortcut). Runs as SYSTEM, so
+    has rights to write to HKLM\\Run and the Common Startup folder."""
     log = logging.getLogger("novablock.headless")
     if not config.is_installed():
         log.info("Not installed — headless watchdog exits")
@@ -151,6 +155,16 @@ def run_watchdog_headless() -> None:
         # NEVER kill browsers from the headless watchdog — would close
         # browsers every minute. Browser kill is only for install.
         blocker.apply_full_block(kill_browsers=False)
+    # Self-heal persistence: if HKLM\Run or Startup shortcut got tampered,
+    # re-create them. The scheduled task itself is not re-installed here to
+    # avoid recursion (the task IS what's calling us).
+    try:
+        persistence.add_startup_registry()
+        if not persistence.startup_shortcut_present():
+            log.info("Startup shortcut missing — re-creating")
+            persistence.add_startup_shortcut()
+    except Exception as e:
+        log.warning("persistence self-heal failed: %s", e)
 
 
 def run_diagnostic() -> int:
@@ -191,7 +205,8 @@ def run_diagnostic() -> int:
 
     lines.append("")
     lines.append("[Persistence]")
-    lines.append(f"   Scheduled task : {persistence.task_exists()}")
+    lines.append(f"   Scheduled task   : {persistence.task_exists()}")
+    lines.append(f"   Startup shortcut : {persistence.startup_shortcut_present()}")
 
     lines.append("")
     lines.append("=" * 60)
@@ -243,6 +258,7 @@ def run_uninstall_check() -> int:
     blocker.remove_full_block()
     persistence.remove_scheduled_task()
     persistence.remove_startup_registry()
+    persistence.remove_startup_shortcut()
     try:
         from .paths import CONFIG_FILE
         CONFIG_FILE.unlink(missing_ok=True)
@@ -264,13 +280,22 @@ def main() -> int:
     parser.add_argument("--reapply", action="store_true", help="Force re-apply blocking")
     args, _ = parser.parse_known_args()
 
+    # --watchdog must be invoked by the scheduled task running as SYSTEM.
+    # Triggering UAC from a headless boot context fails silently and the
+    # process dies — leaving NovaBlock un-launched at every reboot. So in
+    # watchdog mode we NEVER attempt elevation: if we're not admin, the
+    # scheduled task is misconfigured and must be re-installed by the
+    # interactive app on next launch.
+    if args.watchdog:
+        if not is_admin():
+            log.error("Watchdog tick has no admin rights — scheduled task is NOT running as SYSTEM. Aborting tick.")
+            return 1
+        run_watchdog_headless()
+        return 0
+
     if not is_admin():
         log.warning("Not admin — re-launching with elevation")
         relaunch_as_admin()
-        return 0
-
-    if args.watchdog:
-        run_watchdog_headless()
         return 0
 
     if args.uninstall:
