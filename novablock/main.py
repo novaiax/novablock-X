@@ -13,7 +13,7 @@ import sys
 import time
 from logging.handlers import RotatingFileHandler
 
-from . import config, blocker, persistence, single_instance
+from . import config, blocker, persistence, single_instance  # noqa: F401
 from .paths import LOG_FILE, PROGRAM_DATA, ensure_dirs
 
 def _load_embedded() -> tuple[str, str]:
@@ -149,7 +149,14 @@ def run_app() -> None:
 def run_watchdog_headless() -> None:
     """Called by scheduled task. Ensures block is in place AND repairs missing
     persistence layers (registry Run key, Startup shortcut). Runs as SYSTEM, so
-    has rights to write to HKLM\\Run and the Common Startup folder."""
+    has rights to write to HKLM\\Run and the Common Startup folder.
+
+    If the main app is already running, its in-process watchdog handles the
+    block re-apply. We skip that here to avoid race conditions over the hosts
+    file (two processes simultaneously rewriting it caused PermissionErrors
+    and ipconfig/netsh timeouts that slowed all internet traffic). We still
+    perform the persistence self-heal because that's idempotent and the
+    main app may not be checking those layers as eagerly."""
     log = logging.getLogger("novablock.headless")
     if not config.is_installed():
         log.info("Not installed — headless watchdog exits")
@@ -157,11 +164,15 @@ def run_watchdog_headless() -> None:
     if config.is_temp_unlocked():
         log.info("Temp unlocked — skipping re-apply")
         return
-    if not blocker.hosts_block_present() or not blocker.dns_is_locked():
-        log.warning("Block missing — re-applying from headless")
-        # NEVER kill browsers from the headless watchdog — would close
-        # browsers every minute. Browser kill is only for install.
-        blocker.apply_full_block(kill_browsers=False)
+    main_running = single_instance.is_running()
+    if not main_running:
+        if not blocker.hosts_block_present() or not blocker.dns_is_locked():
+            log.warning("Block missing AND main app not running — re-applying from headless")
+            # NEVER kill browsers from the headless watchdog — would close
+            # browsers every minute. Browser kill is only for install.
+            blocker.apply_full_block(kill_browsers=False)
+    else:
+        log.debug("Main app is running — skipping block re-apply (its watchdog handles it)")
     # Self-heal persistence: if HKLM\Run, Startup shortcut, or the logon task
     # got tampered, re-create them. The watchdog scheduled task itself is not
     # re-installed here to avoid recursion (it IS what's calling us). The

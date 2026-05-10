@@ -265,10 +265,17 @@ def remove_hosts_block() -> None:
 
 
 def hosts_block_present() -> bool:
+    """Check if the NovaBlock marker is in the hosts file. Optimised: reads
+    only the last 4KB instead of the full ~2.5MB file (the END marker is at
+    the very end, so finding it there proves the block is in place)."""
     if not WINDOWS_HOSTS.exists():
         return False
     try:
-        return BLOCK_MARKER_START in WINDOWS_HOSTS.read_text(encoding="utf-8", errors="ignore")
+        size = WINDOWS_HOSTS.stat().st_size
+        with open(WINDOWS_HOSTS, "rb") as f:
+            f.seek(max(0, size - 4096))
+            tail = f.read().decode("utf-8", errors="ignore")
+        return BLOCK_MARKER_END in tail
     except Exception:
         return False
 
@@ -320,14 +327,34 @@ def reset_dns() -> int:
 
 
 def dns_is_locked() -> bool:
-    code, out, _ = _run(
-        ["powershell", "-NoProfile", "-Command",
-         "Get-DnsClientServerAddress -AddressFamily IPv4 | Select-Object -ExpandProperty ServerAddresses"],
-        timeout=15,
-    )
-    if code != 0:
+    """Check if any active interface has Cloudflare Family DNS set. Reads the
+    registry directly (instant) instead of launching PowerShell (~1-2s startup
+    cost) every 30s — the slow PowerShell calls were a major cause of the
+    internet-slowdown reported by users."""
+    import winreg
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces",
+        ) as root:
+            n_subkeys, _, _ = winreg.QueryInfoKey(root)
+            for i in range(n_subkeys):
+                guid = winreg.EnumKey(root, i)
+                try:
+                    with winreg.OpenKey(root, guid) as ifkey:
+                        try:
+                            ns, _ = winreg.QueryValueEx(ifkey, "NameServer")
+                        except FileNotFoundError:
+                            ns = ""
+                        if ns and FAMILY_DNS_PRIMARY in ns:
+                            return True
+                except OSError:
+                    continue
         return False
-    return FAMILY_DNS_PRIMARY in out
+    except OSError:
+        # Cannot read registry (not admin?) — assume locked to avoid
+        # triggering an unnecessary re-apply that would slow things down.
+        return True
 
 
 def apply_full_block(kill_browsers: bool = True) -> dict:

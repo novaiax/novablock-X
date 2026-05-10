@@ -28,3 +28,14 @@ def release() -> None:
         _kernel32.ReleaseMutex(_handle)
         _kernel32.CloseHandle(_handle)
         _handle = None
+
+
+def is_running() -> bool:
+    """Returns True if a main NovaBlock instance is already running (lock held
+    by another process). Used by the headless watchdog to skip ticks that
+    would race with the in-process watchdog over the hosts file."""
+    h = _kernel32.OpenMutexW(0x100000, False, MUTEX_NAME)  # SYNCHRONIZE
+    if h:
+        _kernel32.CloseHandle(h)
+        return True
+    return False
