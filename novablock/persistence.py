@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .paths import TASK_NAME, exe_path
+from .paths import LOGON_TASK_NAME, TASK_NAME, exe_path
 
 log = logging.getLogger("novablock.persistence")
 
@@ -112,6 +112,99 @@ def remove_scheduled_task() -> bool:
 
 def task_exists() -> bool:
     code, _, _ = _run(["schtasks", "/Query", "/TN", TASK_NAME])
+    return code == 0
+
+
+def _current_user_sid() -> str:
+    """SID of the user installing NovaBlock — used so the logon task launches
+    the full app under that user's interactive session (with their highest
+    available privileges, no UAC prompt for admins)."""
+    import getpass
+    import win32security  # type: ignore
+    sid_obj, _domain, _type = win32security.LookupAccountName(None, getpass.getuser())
+    return win32security.ConvertSidToStringSid(sid_obj)
+
+
+def install_logon_task() -> bool:
+    """Creates a second scheduled task that launches the FULL app (tray +
+    monitor + popup) at user logon, in the user's interactive session, with
+    HighestAvailable privileges. This bypasses the UAC prompt that otherwise
+    blocks HKLM\\Run and Startup folder shortcuts (because the manifest is
+    'requireAdministrator')."""
+    try:
+        sid = _current_user_sid()
+    except Exception as e:
+        log.error("Cannot resolve current user SID for logon task: %s", e)
+        return False
+
+    xml = f"""<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>NovaBlock app — launches tray + monitor at user logon</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{sid}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{sid}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>false</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>5</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>{Path(exe_path()).as_posix().replace('/', '\\\\')}</Command>
+    </Exec>
+  </Actions>
+</Task>
+"""
+    from .paths import PROGRAM_DATA, ensure_dirs
+    ensure_dirs()
+    xml_file = PROGRAM_DATA / "task_app.xml"
+    xml_file.write_text(xml, encoding="utf-16")
+    code, _out, err = _run([
+        "schtasks", "/Create", "/TN", LOGON_TASK_NAME, "/XML", str(xml_file), "/F"
+    ])
+    if code != 0:
+        log.error("schtasks create logon task failed: %s", err)
+        return False
+    log.info("Logon scheduled task installed (user SID=%s)", sid)
+    return True
+
+
+def remove_logon_task() -> bool:
+    code, _, err = _run(["schtasks", "/Delete", "/TN", LOGON_TASK_NAME, "/F"])
+    if code != 0:
+        log.warning("schtasks delete logon task: %s", err)
+        return False
+    return True
+
+
+def logon_task_exists() -> bool:
+    code, _, _ = _run(["schtasks", "/Query", "/TN", LOGON_TASK_NAME])
     return code == 0
 
 

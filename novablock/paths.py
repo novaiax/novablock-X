@@ -15,6 +15,7 @@ BLOCK_MARKER_START = "# === NOVABLOCK START === DO NOT EDIT ==="
 BLOCK_MARKER_END = "# === NOVABLOCK END ==="
 
 TASK_NAME = "NovaBlockWatchdog"
+LOGON_TASK_NAME = "NovaBlockApp"
 
 def ensure_dirs():
     PROGRAM_DATA.mkdir(parents=True, exist_ok=True)

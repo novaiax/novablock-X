@@ -13,6 +13,7 @@ a = Analysis(
         'PIL._tkinter_finder',
         'win32com',
         'win32com.client',
+        'win32security',
     ],
     hookspath=[],
     hooksconfig={},

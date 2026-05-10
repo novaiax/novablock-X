@@ -75,6 +75,13 @@ def ensure_persistence() -> None:
             persistence.remove_scheduled_task()
             persistence.install_scheduled_task()
             log.info("Scheduled task refreshed to current exe path")
+        # Logon task: launches full app (tray + monitor) at user logon, with
+        # HighestAvailable privileges so the manifest UAC prompt is suppressed
+        # for admin users. This is the layer that actually starts the app at
+        # boot — HKLM\\Run and Startup folder shortcuts are blocked by UAC.
+        if persistence.logon_task_exists():
+            persistence.remove_logon_task()
+        persistence.install_logon_task()
         persistence.add_startup_registry()
         persistence.add_startup_shortcut()
     except Exception as e:
@@ -155,14 +162,18 @@ def run_watchdog_headless() -> None:
         # NEVER kill browsers from the headless watchdog — would close
         # browsers every minute. Browser kill is only for install.
         blocker.apply_full_block(kill_browsers=False)
-    # Self-heal persistence: if HKLM\Run or Startup shortcut got tampered,
-    # re-create them. The scheduled task itself is not re-installed here to
-    # avoid recursion (the task IS what's calling us).
+    # Self-heal persistence: if HKLM\Run, Startup shortcut, or the logon task
+    # got tampered, re-create them. The watchdog scheduled task itself is not
+    # re-installed here to avoid recursion (it IS what's calling us). The
+    # logon task is recreated only if missing — refreshing it would require
+    # re-resolving the user SID, which doesn't make sense from SYSTEM context.
     try:
         persistence.add_startup_registry()
         if not persistence.startup_shortcut_present():
             log.info("Startup shortcut missing — re-creating")
             persistence.add_startup_shortcut()
+        if not persistence.logon_task_exists():
+            log.warning("Logon task missing — cannot recreate from SYSTEM context (needs interactive user SID)")
     except Exception as e:
         log.warning("persistence self-heal failed: %s", e)
 
@@ -205,7 +216,8 @@ def run_diagnostic() -> int:
 
     lines.append("")
     lines.append("[Persistence]")
-    lines.append(f"   Scheduled task   : {persistence.task_exists()}")
+    lines.append(f"   Watchdog task    : {persistence.task_exists()}")
+    lines.append(f"   Logon task       : {persistence.logon_task_exists()}")
     lines.append(f"   Startup shortcut : {persistence.startup_shortcut_present()}")
 
     lines.append("")
@@ -257,6 +269,7 @@ def run_uninstall_check() -> int:
         return 1
     blocker.remove_full_block()
     persistence.remove_scheduled_task()
+    persistence.remove_logon_task()
     persistence.remove_startup_registry()
     persistence.remove_startup_shortcut()
     try:
