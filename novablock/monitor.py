@@ -1,6 +1,7 @@
 """Active window monitor: detects browser navigation to adult sites and triggers
 the block popup. Runs as a low-priority background thread. ~0% CPU at idle."""
 import logging
+import re
 import threading
 import time
 from typing import Callable, Optional
@@ -22,19 +23,35 @@ BROWSER_PROCS = {
     "opera.exe", "vivaldi.exe", "iexplore.exe", "tor.exe",
 }
 
-ADULT_KEYWORDS = [
-    "porn", "xxx", "nsfw", "nude", "naked", "boobs", "tits",
-    "milf", "hentai", "rule34", "onlyfans", "fansly",
-    "cam girl", "camgirl", "stripchat", "chaturbate",
-    "xhamster", "pornhub", "xvideos", "redtube", "youporn",
-    "spankbang", "xnxx", "tube8", "porntrex", "fap",
-    "nudes", "leaked", "anal", "blowjob",
-    "erotic", "erotique", "hardcore", "softcore",
-    # Yandex search engine: known porn-bypass, blocked entirely
-    "yandex", "ya.ru", "yastatic",
+# Keywords that match anywhere in the title (substring). Used for unique,
+# unambiguous adult-site/term tokens that wouldn't appear inside a normal word.
+ADULT_KEYWORDS_SUBSTRING = [
+    "porn", "xxx", "milf", "hentai", "onlyfans", "fansly",
+    "stripchat", "chaturbate", "xhamster", "pornhub", "xvideos",
+    "redtube", "youporn", "spankbang", "xnxx", "porntrex",
+    "camgirl", "yandex", "yastatic", "rule34",
     # Common French queries that surface adult content via search engines
     "video x ", "film x ", "video porno", "site porno",
+    "ya.ru",
 ]
+
+# Keywords that must match as a whole word — they are too short or too close
+# to legitimate French/English words to be safely matched as substrings.
+# Examples of false positives we avoid:
+#   "anal"   → "analyse", "national", "analogique"
+#   "fap"    → "japanese", "afap"
+#   "nude"   → "denude", "Klaus Klude"
+#   "tits"   → rare but "tit" appears in some words
+#   "naked"  → "naked-eye observation"
+ADULT_KEYWORDS_WORD = [
+    "nsfw", "nude", "nudes", "naked", "boobs", "tits", "fap",
+    "anal", "blowjob", "erotic", "erotique",
+    "hardcore", "softcore", "leaked",
+    "cam girl", "tube8",
+]
+
+# Backward-compat alias (some external code may still reference ADULT_KEYWORDS)
+ADULT_KEYWORDS = ADULT_KEYWORDS_SUBSTRING + ADULT_KEYWORDS_WORD
 
 
 class WindowMonitor:
@@ -50,6 +67,17 @@ class WindowMonitor:
         self._domain_keywords: list[str] = []
         self._load_domains()
 
+    # Common English/French words that happen to be subdomains of porn sites
+    # (e.g. articles.rsdnation.com → "articles"). Matched as whole words below,
+    # but we also drop them from the keyword list outright to keep the set lean.
+    _DOMAIN_KEYWORD_BLACKLIST = {
+        "www", "static", "media", "cdn", "images", "video", "videos",
+        "search", "articles", "article", "content", "pages", "files",
+        "download", "downloads", "upload", "uploads", "support", "forum",
+        "forums", "blog", "blogs", "news", "store", "shop", "login",
+        "signin", "register", "account", "profile", "settings",
+    }
+
     def _load_domains(self) -> None:
         self._domain_keywords = []
         if not BLOCKLIST_CACHE.exists():
@@ -60,7 +88,7 @@ class WindowMonitor:
                 if not d or "." not in d:
                     continue
                 base = d.split(".")[0]
-                if len(base) >= 6 and base not in {"www", "static", "media", "cdn"}:
+                if len(base) >= 6 and base not in self._DOMAIN_KEYWORD_BLACKLIST:
                     self._domain_keywords.append(base)
         except Exception as e:
             log.warning("could not load domain keywords: %s", e)
@@ -90,11 +118,25 @@ class WindowMonitor:
 
     def _check_title(self, title: str) -> Optional[str]:
         t = title.lower()
-        for kw in ADULT_KEYWORDS:
+        # Substring match: unique, unambiguous tokens (e.g. "porn" → matches
+        # "pornography", "pornhub", "hardcore-porn"…).
+        for kw in ADULT_KEYWORDS_SUBSTRING:
             if kw in t:
                 return kw
+        # Word-boundary match: short or ambiguous keywords ("anal", "fap"…)
+        # plus all domain keywords (auto-extracted from the blocklist) which
+        # might collide with normal words like "articles".
+        words = set(re.findall(r"[a-z0-9]+", t))
+        for kw in ADULT_KEYWORDS_WORD:
+            # multi-word phrases ("cam girl") aren't in `words`, fall back to
+            # substring match for those
+            if " " in kw:
+                if kw in t:
+                    return kw
+            elif kw in words:
+                return kw
         for d in self._domain_keywords:
-            if d in t:
+            if d in words:
                 return d
         return None
 
