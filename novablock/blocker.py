@@ -1,5 +1,6 @@
 import ctypes
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -302,6 +303,19 @@ def lock_hosts_acl() -> None:
     _run(["icacls", str(WINDOWS_HOSTS), "/grant:r", "Users:R"], timeout=15)
 
 
+def _atomic_write_hosts(content: str) -> None:
+    """Write hosts atomically: write to a temp file in the same directory,
+    then replace. Prevents the file from being truncated mid-write when the
+    OS or another process holds a lock — that left users with a tiny / empty
+    hosts file, which then made `hosts_block_present()` return False forever
+    and the watchdog re-apply in a busy loop."""
+    temp = WINDOWS_HOSTS.with_name(WINDOWS_HOSTS.name + ".novablock.tmp")
+    temp.write_text(content, encoding="utf-8")
+    # os.replace is atomic on Windows when both files are on the same volume
+    # and the destination is not held with FILE_SHARE_DELETE=0.
+    os.replace(str(temp), str(WINDOWS_HOSTS))
+
+
 def _read_hosts_safe() -> str:
     """Read hosts file robustly. If unreadable or hosts is missing, restore
     from backup. If no backup, return a minimal default content."""
@@ -335,6 +349,7 @@ def apply_hosts_block(domains: list[str] | None = None) -> int:
         domains = download_blocklist()
 
     last_err: Exception | None = None
+    success = False
     for attempt in (1, 2, 3):
         try:
             unlock_hosts_acl()
@@ -343,25 +358,30 @@ def apply_hosts_block(domains: list[str] | None = None) -> int:
             if not cleaned.endswith("\n"):
                 cleaned += "\n"
             new_content = cleaned + _build_block(domains)
-            WINDOWS_HOSTS.write_text(new_content, encoding="utf-8")
+            _atomic_write_hosts(new_content)
             _run(["ipconfig", "/flushdns"], timeout=10)
             log.info("Applied hosts block: %d domains (attempt %d)",
                      len(set(domains)), attempt)
+            success = True
             return len(set(domains))
         except PermissionError as e:
             last_err = e
             log.warning("hosts write PermissionError (attempt %d) — re-unlocking ACL", attempt)
-            # Force a fresh takeown + reset on next iteration
-            time.sleep(0.5)
+            time.sleep(1.5)
         except OSError as e:
             last_err = e
             log.warning("hosts write OSError (attempt %d): %s", attempt, e)
-            time.sleep(0.5)
+            time.sleep(1.5)
         finally:
-            try:
-                lock_hosts_acl()
-            except Exception:
-                pass
+            # Only re-lock the ACL on success. If we failed, leaving the ACL
+            # unlocked makes the *next* tick more likely to succeed — locking
+            # after a failure was making the system get stuck (PermissionError
+            # forever, netsh/ipconfig timeouts, internet broken).
+            if success:
+                try:
+                    lock_hosts_acl()
+                except Exception:
+                    pass
     log.error("Failed to apply hosts block after 3 attempts: %s", last_err)
     return 0
 

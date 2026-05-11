@@ -8,6 +8,10 @@ LOG_FILE = PROGRAM_DATA / "novablock.log"
 HOSTS_BACKUP = PROGRAM_DATA / "hosts.original"
 BLOCKLIST_CACHE = PROGRAM_DATA / "blocklist.txt"
 LOCK_FILE = PROGRAM_DATA / "novablock.lock"
+# Updated by the main-app in-process watchdog every tick. The headless
+# --watchdog reads it to decide whether to re-apply: if the main app is
+# active (recent heartbeat), the headless skips to avoid racing on hosts.
+HEARTBEAT_FILE = PROGRAM_DATA / "watchdog.heartbeat"
 
 WINDOWS_HOSTS = Path(r"C:\Windows\System32\drivers\etc\hosts")
 

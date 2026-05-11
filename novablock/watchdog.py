@@ -11,6 +11,7 @@ import time
 from typing import Callable, Optional
 
 from . import config, blocker, crypto, mailer, browser_policies, firewall, tamper, persistence
+from .paths import HEARTBEAT_FILE, ensure_dirs
 
 log = logging.getLogger("novablock.watchdog")
 
@@ -97,9 +98,21 @@ class Watchdog:
                 pass
         log.info("Code invalidated. Next unlock request will email a fresh code.")
 
+    def _heartbeat(self) -> None:
+        """Tell the headless SYSTEM watchdog that we (the main app's in-process
+        watchdog) are alive and handling re-applies. The headless reads this
+        timestamp and skips re-applies when it's recent — prevents races on
+        the hosts file."""
+        try:
+            ensure_dirs()
+            HEARTBEAT_FILE.write_text(str(int(time.time())), encoding="utf-8")
+        except Exception as e:
+            log.debug("heartbeat write failed: %s", e)
+
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
+                self._heartbeat()
                 self._tick()
             except Exception as e:
                 log.exception("watchdog tick error: %s", e)
