@@ -70,6 +70,13 @@ EXTRA_DOMAINS = [d for d in EXTRA_DOMAINS if "duckduckgo" not in d]
 
 FAMILY_DNS_PRIMARY = "1.1.1.3"
 FAMILY_DNS_SECONDARY = "1.0.0.3"
+# Cloudflare Family DNS in IPv6 — equivalent to 1.1.1.3 / 1.0.0.3. Required
+# because Windows prefers IPv6 DNS over IPv4 when both are set. If we leave
+# the DHCPv6-assigned IPv6 DNS in place (often the router's local resolver),
+# resolutions go there first — and many home routers' IPv6 resolvers are
+# unstable, breaking *all* internet access despite our IPv4 DNS being fine.
+FAMILY_DNS_PRIMARY_V6 = "2606:4700:4700::1113"
+FAMILY_DNS_SECONDARY_V6 = "2606:4700:4700::1003"
 
 
 # DNS-level SafeSearch enforcement.
@@ -292,51 +299,67 @@ def list_active_interfaces() -> list[str]:
 
 
 def set_family_dns() -> int:
+    """Force Cloudflare Family DNS (1.1.1.3) on BOTH IPv4 and IPv6 stacks of
+    each active interface. The IPv6 part is critical: Windows prefers IPv6 DNS
+    when both are set, so leaving the DHCPv6-assigned router DNS in place
+    (often unstable in home setups) breaks resolution entirely even when our
+    IPv4 1.1.1.3 is reachable."""
     n = 0
     for iface in list_active_interfaces():
-        code, _, _ = _run(
+        code_v4, _, _ = _run(
             ["netsh", "interface", "ipv4", "set", "dns",
              f"name={iface}", "static", FAMILY_DNS_PRIMARY, "primary"],
             timeout=15,
         )
-        if code == 0:
+        if code_v4 == 0:
             _run(
                 ["netsh", "interface", "ipv4", "add", "dns",
                  f"name={iface}", FAMILY_DNS_SECONDARY, "index=2"],
                 timeout=15,
             )
+        # IPv6 — same Family DNS, in IPv6 form. Errors silently ignored on
+        # interfaces without IPv6 enabled (rare).
+        code_v6, _, _ = _run(
+            ["netsh", "interface", "ipv6", "set", "dns",
+             f"name={iface}", "static", FAMILY_DNS_PRIMARY_V6, "primary"],
+            timeout=15,
+        )
+        if code_v6 == 0:
+            _run(
+                ["netsh", "interface", "ipv6", "add", "dns",
+                 f"name={iface}", FAMILY_DNS_SECONDARY_V6, "index=2"],
+                timeout=15,
+            )
+        if code_v4 == 0 or code_v6 == 0:
             n += 1
     if n:
         _run(["ipconfig", "/flushdns"], timeout=10)
-        log.info("Set family DNS on %d interface(s)", n)
+        log.info("Set family DNS (v4+v6) on %d interface(s)", n)
     return n
 
 
 def reset_dns() -> int:
     n = 0
     for iface in list_active_interfaces():
-        code, _, _ = _run(
+        code_v4, _, _ = _run(
             ["netsh", "interface", "ipv4", "set", "dns", f"name={iface}", "dhcp"],
             timeout=15,
         )
-        if code == 0:
+        _run(
+            ["netsh", "interface", "ipv6", "set", "dns", f"name={iface}", "dhcp"],
+            timeout=15,
+        )
+        if code_v4 == 0:
             n += 1
     if n:
         _run(["ipconfig", "/flushdns"], timeout=10)
     return n
 
 
-def dns_is_locked() -> bool:
-    """Check if any active interface has Cloudflare Family DNS set. Reads the
-    registry directly (instant) instead of launching PowerShell (~1-2s startup
-    cost) every 30s — the slow PowerShell calls were a major cause of the
-    internet-slowdown reported by users."""
+def _any_iface_has_dns(reg_path: str, dns_ip: str) -> bool:
     import winreg
     try:
-        with winreg.OpenKey(
-            winreg.HKEY_LOCAL_MACHINE,
-            r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces",
-        ) as root:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as root:
             n_subkeys, _, _ = winreg.QueryInfoKey(root)
             for i in range(n_subkeys):
                 guid = winreg.EnumKey(root, i)
@@ -346,15 +369,33 @@ def dns_is_locked() -> bool:
                             ns, _ = winreg.QueryValueEx(ifkey, "NameServer")
                         except FileNotFoundError:
                             ns = ""
-                        if ns and FAMILY_DNS_PRIMARY in ns:
+                        if ns and dns_ip in ns:
                             return True
                 except OSError:
                     continue
         return False
     except OSError:
-        # Cannot read registry (not admin?) — assume locked to avoid
-        # triggering an unnecessary re-apply that would slow things down.
+        # Cannot read registry — assume OK so we don't spam re-applies.
         return True
+
+
+def dns_is_locked() -> bool:
+    """Check if BOTH IPv4 and IPv6 DNS are locked to Cloudflare Family. Reads
+    the registry directly (instant) instead of launching PowerShell.
+
+    Both stacks must be locked: if only IPv4 is locked, Windows prefers the
+    DHCPv6-assigned IPv6 DNS (often the router) which may be unstable and
+    breaks resolution. So a half-locked state is treated as 'not locked' to
+    trigger a re-apply that fixes both."""
+    v4_ok = _any_iface_has_dns(
+        r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces",
+        FAMILY_DNS_PRIMARY,
+    )
+    v6_ok = _any_iface_has_dns(
+        r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces",
+        FAMILY_DNS_PRIMARY_V6,
+    )
+    return v4_ok and v6_ok
 
 
 def apply_full_block(kill_browsers: bool = True) -> dict:
