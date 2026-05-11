@@ -430,41 +430,58 @@ def set_family_dns() -> int:
     active interface. Tries Cloudflare Family first, falls back to OpenDNS /
     Quad9 / CleanBrowsing if Cloudflare is unreachable from this network.
 
+    Critical: if `netsh set dns` times out (the Windows DNS Client service is
+    saturated — happens during heavy network load like OBS streaming), we
+    abort immediately without touching the rest. A timeout mid-way leaves
+    the interface with NO DNS configured (old removed, new not applied),
+    which kills all internet for the user. Better to keep whatever DNS is
+    currently active and retry on the next tick.
+
     Never leaves the user's DHCP DNS in place — that would defeat the family
     filter. If absolutely nothing is reachable, sets Cloudflare anyway and
     relies on the hosts file block alone until the network recovers."""
     name, v4p, v4s, v6p, v6s = choose_family_dns()
     n = 0
     for iface in list_active_interfaces():
-        code_v4, _, _ = _run(
+        code_v4, _, err_v4 = _run(
             ["netsh", "interface", "ipv4", "set", "dns",
              f"name={iface}", "static", v4p, "primary"],
-            timeout=15,
+            timeout=20,
         )
+        if err_v4 == "timeout":
+            # DNS Client service saturated. Don't touch the rest — that would
+            # leave us with no DNS at all. Retry next tick.
+            log.warning("netsh ipv4 set dns timed out on %s — aborting DNS set this tick", iface)
+            return 0
         if code_v4 == 0 and v4s:
             _run(
                 ["netsh", "interface", "ipv4", "add", "dns",
                  f"name={iface}", v4s, "index=2"],
-                timeout=15,
+                timeout=20,
             )
-        # IPv6 — only set if the chosen provider offers it. Errors silently
-        # ignored on interfaces without IPv6 enabled.
+        # IPv6 — only set if the chosen provider offers it AND v4 already
+        # succeeded (we don't want to half-configure during saturation).
         code_v6 = -1
-        if v6p:
-            code_v6, _, _ = _run(
+        if v6p and code_v4 == 0:
+            code_v6, _, err_v6 = _run(
                 ["netsh", "interface", "ipv6", "set", "dns",
                  f"name={iface}", "static", v6p, "primary"],
-                timeout=15,
+                timeout=20,
             )
-            if code_v6 == 0 and v6s:
+            if err_v6 == "timeout":
+                log.warning("netsh ipv6 set dns timed out on %s — v6 left as-is", iface)
+            elif code_v6 == 0 and v6s:
                 _run(
                     ["netsh", "interface", "ipv6", "add", "dns",
                      f"name={iface}", v6s, "index=2"],
-                    timeout=15,
+                    timeout=20,
                 )
         if code_v4 == 0 or code_v6 == 0:
             n += 1
     if n:
+        # Only flush after a real change — `ipconfig /flushdns` itself can
+        # take >10s when the DNS Client service is saturated, and flushing
+        # during saturation makes resolution worse.
         _run(["ipconfig", "/flushdns"], timeout=10)
         log.info("Set %s DNS (v4+v6) on %d interface(s)", name, n)
     return n
@@ -542,7 +559,14 @@ def apply_full_block(kill_browsers: bool = True) -> dict:
         domains.append(d)
         domains.append(f"www.{d}")
     n_hosts = apply_hosts_block(domains)
-    n_dns = set_family_dns()
+    # Only touch DNS if it's actually not locked. Re-applying when it's already
+    # correct wastes time and (worse) risks leaving the interface mid-config
+    # if `netsh` times out under load (OBS streaming, heavy disk I/O, etc.).
+    if dns_is_locked():
+        n_dns = 0
+        log.debug("DNS already locked — skipping set_family_dns")
+    else:
+        n_dns = set_family_dns()
     pol = browser_policies.apply_all_browser_policies()
     n_fw = firewall.block_doh_endpoints()
     n_killed = browser_kill.kill_all_browsers() if kill_browsers else 0
