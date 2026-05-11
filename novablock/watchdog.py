@@ -49,6 +49,38 @@ def _streaming_active() -> bool:
     return False
 
 
+def _restart_dns_client_service() -> bool:
+    """Restart the Windows DNS Client service (Dnscache). Frees the resolver's
+    saturated queues after heavy network activity (e.g. post-stream cleanup
+    when apps appear disconnected). Apps that resolved a hostname before the
+    restart keep working — only NEW lookups go through the freshly restarted
+    cache."""
+    import subprocess
+    log.warning("Restarting Dnscache service to free saturated DNS resolver")
+    try:
+        subprocess.run(
+            ["net", "stop", "Dnscache", "/y"],
+            capture_output=True, timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        time.sleep(1.0)
+        subprocess.run(
+            ["net", "start", "Dnscache"],
+            capture_output=True, timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        subprocess.run(
+            ["ipconfig", "/flushdns"],
+            capture_output=True, timeout=10,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        log.info("Dnscache restarted successfully")
+        return True
+    except Exception as e:
+        log.error("Dnscache restart failed: %s", e)
+        return False
+
+
 class Watchdog:
     def __init__(self, interval: int = 30,
                  on_rotation: Optional[Callable[[], None]] = None):
@@ -56,6 +88,12 @@ class Watchdog:
         self.on_rotation = on_rotation
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        # Counts consecutive ticks where set_family_dns aborted on netsh
+        # timeout — a sign that the DNS Client service is saturated. After 3
+        # consecutive timeouts AND no streaming app running, we restart
+        # Dnscache to free it. The counter resets on any successful DNS op
+        # or stream detection.
+        self._dns_timeout_streak = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -101,10 +139,30 @@ class Watchdog:
             elif not blocker.dns_is_locked():
                 if streaming:
                     log.info("DNS not locked but streaming detected — skipping DNS re-apply this tick")
+                    # Streaming saturates the resolver; don't count this as
+                    # a real timeout streak.
+                    self._dns_timeout_streak = 0
                 else:
                     log.warning("DNS not locked — re-applying")
                     tampered.append(tamper.DNS_REVERTED)
-                    blocker.set_family_dns()
+                    n_dns = blocker.set_family_dns()
+                    if n_dns == 0:
+                        # set_family_dns aborted (likely on netsh timeout —
+                        # the DNS Client service is saturated)
+                        self._dns_timeout_streak += 1
+                        log.warning("set_family_dns returned 0 — timeout streak=%d",
+                                    self._dns_timeout_streak)
+                        if self._dns_timeout_streak >= 3:
+                            log.error("3 consecutive netsh DNS timeouts — auto-restarting Dnscache")
+                            if _restart_dns_client_service():
+                                self._dns_timeout_streak = 0
+                                # Retry the set after the restart
+                                try:
+                                    blocker.set_family_dns()
+                                except Exception as e:
+                                    log.warning("post-restart set_family_dns failed: %s", e)
+                    else:
+                        self._dns_timeout_streak = 0
             if not browser_policies.policies_present():
                 log.warning("Browser policies missing — re-applying")
                 tampered.append(tamper.POLICIES_REMOVED)
