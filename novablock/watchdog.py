@@ -16,6 +16,39 @@ from .paths import HEARTBEAT_FILE, ensure_dirs
 log = logging.getLogger("novablock.watchdog")
 
 
+# Process names whose presence indicates a live-streaming session.
+# During a stream, the Windows DNS Client service saturates and `netsh set
+# dns` calls time out — leaving the interface with no DNS configured and
+# breaking internet for the entire stream. We detect streaming and skip the
+# *DNS* operations during it; hosts file, browser policies, and firewall
+# checks still run as normal. Once the stream ends, the next tick brings
+# DNS back to Cloudflare Family.
+STREAMING_PROCESSES = {
+    "obs64.exe", "obs32.exe", "obs.exe",            # OBS Studio
+    "streamlabs obs.exe", "streamlabs.exe",         # Streamlabs Desktop
+    "xsplit.broadcaster.exe", "xsplit.core.exe",    # XSplit Broadcaster
+    "tiktok live studio.exe", "tiktoklivestudio.exe",  # TikTok Live Studio
+    "youtube live.exe",                              # YouTube Live (rare)
+    "twitch studio.exe",                             # Twitch Studio
+}
+
+
+def _streaming_active() -> bool:
+    """Cheap process scan: True if any known streaming app is running."""
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        for p in psutil.process_iter(["name"]):
+            name = (p.info.get("name") or "").lower()
+            if name in STREAMING_PROCESSES:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 class Watchdog:
     def __init__(self, interval: int = 30,
                  on_rotation: Optional[Callable[[], None]] = None):
@@ -42,6 +75,13 @@ class Watchdog:
         if not cfg.get("install_ts"):
             return
 
+        # While a live-streaming app is running, skip DNS-level operations
+        # (the Windows DNS Client service is saturated by the stream's RTMP
+        # + chunked uploads — netsh times out and breaks the user's
+        # connection). Hosts file, browser policies, firewall, and scheduled
+        # task checks still run.
+        streaming = _streaming_active()
+
         if config.is_temp_unlocked():
             if blocker.hosts_block_present():
                 blocker.remove_hosts_block()
@@ -51,11 +91,20 @@ class Watchdog:
             if not blocker.hosts_block_present():
                 log.warning("Hosts block missing — re-applying")
                 tampered.append(tamper.HOSTS_REMOVED)
-                blocker.apply_full_block(kill_browsers=False)
+                if streaming:
+                    # Don't call apply_full_block (which would also touch
+                    # DNS via set_family_dns). Just rewrite the hosts file.
+                    log.info("Streaming detected — applying hosts-only (skipping DNS)")
+                    blocker.apply_hosts_block()
+                else:
+                    blocker.apply_full_block(kill_browsers=False)
             elif not blocker.dns_is_locked():
-                log.warning("DNS not locked — re-applying")
-                tampered.append(tamper.DNS_REVERTED)
-                blocker.set_family_dns()
+                if streaming:
+                    log.info("DNS not locked but streaming detected — skipping DNS re-apply this tick")
+                else:
+                    log.warning("DNS not locked — re-applying")
+                    tampered.append(tamper.DNS_REVERTED)
+                    blocker.set_family_dns()
             if not browser_policies.policies_present():
                 log.warning("Browser policies missing — re-applying")
                 tampered.append(tamper.POLICIES_REMOVED)
