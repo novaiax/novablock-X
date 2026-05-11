@@ -78,6 +78,29 @@ FAMILY_DNS_SECONDARY = "1.0.0.3"
 FAMILY_DNS_PRIMARY_V6 = "2606:4700:4700::1113"
 FAMILY_DNS_SECONDARY_V6 = "2606:4700:4700::1003"
 
+# Ordered list of family-safe DNS providers. All of these filter adult content
+# at the DNS level. If the preferred provider (Cloudflare Family) is
+# unreachable from the user's network, we fall back to the next one — but
+# NEVER to DHCP/router DNS (that would defeat the block). The "" entries for
+# v6 mean the provider doesn't offer IPv6, in which case we still set v4 and
+# leave v6 to whatever was there (the Cloudflare v6 fallback above is tried
+# separately).
+DNS_FALLBACKS = [
+    # (name, v4_primary, v4_secondary, v6_primary, v6_secondary)
+    ("Cloudflare Family",
+     "1.1.1.3", "1.0.0.3",
+     "2606:4700:4700::1113", "2606:4700:4700::1003"),
+    ("OpenDNS FamilyShield",
+     "208.67.222.123", "208.67.220.123",
+     "", ""),
+    ("Quad9 (security + family)",
+     "9.9.9.10", "149.112.112.10",
+     "2620:fe::10", "2620:fe::fe:10"),
+    ("CleanBrowsing Family",
+     "185.228.168.168", "185.228.169.168",
+     "2a0d:2a00:1::", "2a0d:2a00:2::"),
+]
+
 
 # DNS-level SafeSearch enforcement.
 # Maps the public hostname → the Google/YouTube/Bing-provided "safe variant" IP.
@@ -113,6 +136,46 @@ def is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
+
+
+def _dns_reachable(ip: str, timeout: float = 2.0) -> bool:
+    """Send a minimal DNS query (UDP 53) and wait briefly for a response.
+    Used to pick a working family-safe DNS from the fallback list."""
+    if not ip:
+        return False
+    import socket
+    try:
+        family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+        sock = socket.socket(family, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        # A-record query for "example.com" (0x1234 = transaction id)
+        query = (
+            b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00"
+            b"\x07example\x03com\x00\x00\x01\x00\x01"
+        )
+        sock.sendto(query, (ip, 53))
+        sock.recvfrom(512)
+        sock.close()
+        return True
+    except Exception:
+        return False
+
+
+def choose_family_dns() -> tuple[str, str, str, str, str]:
+    """Pick the first reachable family-safe DNS provider from DNS_FALLBACKS.
+    Returns (name, v4_primary, v4_secondary, v6_primary, v6_secondary).
+
+    If none of the fallbacks respond (e.g. captive portal, no internet),
+    return Cloudflare Family anyway — the hosts file block stays in place and
+    DNS will start working again once the network recovers. NEVER returns
+    the user's DHCP DNS (that would defeat the family filter)."""
+    for name, v4p, v4s, v6p, v6s in DNS_FALLBACKS:
+        if _dns_reachable(v4p, timeout=1.5):
+            log.info("DNS choice: %s (%s reachable)", name, v4p)
+            return name, v4p, v4s, v6p, v6s
+    log.warning("No family-safe DNS reachable — falling back to Cloudflare Family anyway")
+    name, v4p, v4s, v6p, v6s = DNS_FALLBACKS[0]
+    return name, v4p, v4s, v6p, v6s
 
 
 def _run(cmd: list[str], check: bool = False, timeout: int = 30) -> tuple[int, str, str]:
@@ -239,24 +302,68 @@ def lock_hosts_acl() -> None:
     _run(["icacls", str(WINDOWS_HOSTS), "/grant:r", "Users:R"], timeout=15)
 
 
+def _read_hosts_safe() -> str:
+    """Read hosts file robustly. If unreadable or hosts is missing, restore
+    from backup. If no backup, return a minimal default content."""
+    if WINDOWS_HOSTS.exists():
+        try:
+            return WINDOWS_HOSTS.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            log.warning("hosts unreadable (%s) — attempting restore from backup", e)
+    if HOSTS_BACKUP.exists():
+        try:
+            shutil.copy2(HOSTS_BACKUP, WINDOWS_HOSTS)
+            log.warning("Restored hosts file from backup")
+            return WINDOWS_HOSTS.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            log.error("backup restore failed: %s", e)
+    # Last resort: minimal default that Windows ships with
+    return (
+        "# Copyright (c) 1993-2009 Microsoft Corp.\n"
+        "# (Restored by NovaBlock — original hosts was missing.)\n"
+        "127.0.0.1 localhost\n"
+        "::1 localhost\n"
+    )
+
+
 def apply_hosts_block(domains: list[str] | None = None) -> int:
+    """Apply the NovaBlock host block to the hosts file. Robust against
+    PermissionError (one retry after re-unlocking the ACL) and missing /
+    corrupted hosts (restore from backup, then re-apply)."""
     backup_hosts()
     if domains is None:
         domains = download_blocklist()
 
-    unlock_hosts_acl()
-    try:
-        existing = WINDOWS_HOSTS.read_text(encoding="utf-8", errors="ignore") if WINDOWS_HOSTS.exists() else ""
-        cleaned = _strip_block(existing)
-        if not cleaned.endswith("\n"):
-            cleaned += "\n"
-        new_content = cleaned + _build_block(domains)
-        WINDOWS_HOSTS.write_text(new_content, encoding="utf-8")
-        _run(["ipconfig", "/flushdns"], timeout=10)
-        log.info("Applied hosts block: %d domains", len(set(domains)))
-    finally:
-        lock_hosts_acl()
-    return len(set(domains))
+    last_err: Exception | None = None
+    for attempt in (1, 2, 3):
+        try:
+            unlock_hosts_acl()
+            existing = _read_hosts_safe()
+            cleaned = _strip_block(existing)
+            if not cleaned.endswith("\n"):
+                cleaned += "\n"
+            new_content = cleaned + _build_block(domains)
+            WINDOWS_HOSTS.write_text(new_content, encoding="utf-8")
+            _run(["ipconfig", "/flushdns"], timeout=10)
+            log.info("Applied hosts block: %d domains (attempt %d)",
+                     len(set(domains)), attempt)
+            return len(set(domains))
+        except PermissionError as e:
+            last_err = e
+            log.warning("hosts write PermissionError (attempt %d) — re-unlocking ACL", attempt)
+            # Force a fresh takeown + reset on next iteration
+            time.sleep(0.5)
+        except OSError as e:
+            last_err = e
+            log.warning("hosts write OSError (attempt %d): %s", attempt, e)
+            time.sleep(0.5)
+        finally:
+            try:
+                lock_hosts_acl()
+            except Exception:
+                pass
+    log.error("Failed to apply hosts block after 3 attempts: %s", last_err)
+    return 0
 
 
 def remove_hosts_block() -> None:
@@ -299,42 +406,47 @@ def list_active_interfaces() -> list[str]:
 
 
 def set_family_dns() -> int:
-    """Force Cloudflare Family DNS (1.1.1.3) on BOTH IPv4 and IPv6 stacks of
-    each active interface. The IPv6 part is critical: Windows prefers IPv6 DNS
-    when both are set, so leaving the DHCPv6-assigned router DNS in place
-    (often unstable in home setups) breaks resolution entirely even when our
-    IPv4 1.1.1.3 is reachable."""
+    """Force a reachable family-safe DNS on BOTH IPv4 and IPv6 stacks of each
+    active interface. Tries Cloudflare Family first, falls back to OpenDNS /
+    Quad9 / CleanBrowsing if Cloudflare is unreachable from this network.
+
+    Never leaves the user's DHCP DNS in place — that would defeat the family
+    filter. If absolutely nothing is reachable, sets Cloudflare anyway and
+    relies on the hosts file block alone until the network recovers."""
+    name, v4p, v4s, v6p, v6s = choose_family_dns()
     n = 0
     for iface in list_active_interfaces():
         code_v4, _, _ = _run(
             ["netsh", "interface", "ipv4", "set", "dns",
-             f"name={iface}", "static", FAMILY_DNS_PRIMARY, "primary"],
+             f"name={iface}", "static", v4p, "primary"],
             timeout=15,
         )
-        if code_v4 == 0:
+        if code_v4 == 0 and v4s:
             _run(
                 ["netsh", "interface", "ipv4", "add", "dns",
-                 f"name={iface}", FAMILY_DNS_SECONDARY, "index=2"],
+                 f"name={iface}", v4s, "index=2"],
                 timeout=15,
             )
-        # IPv6 — same Family DNS, in IPv6 form. Errors silently ignored on
-        # interfaces without IPv6 enabled (rare).
-        code_v6, _, _ = _run(
-            ["netsh", "interface", "ipv6", "set", "dns",
-             f"name={iface}", "static", FAMILY_DNS_PRIMARY_V6, "primary"],
-            timeout=15,
-        )
-        if code_v6 == 0:
-            _run(
-                ["netsh", "interface", "ipv6", "add", "dns",
-                 f"name={iface}", FAMILY_DNS_SECONDARY_V6, "index=2"],
+        # IPv6 — only set if the chosen provider offers it. Errors silently
+        # ignored on interfaces without IPv6 enabled.
+        code_v6 = -1
+        if v6p:
+            code_v6, _, _ = _run(
+                ["netsh", "interface", "ipv6", "set", "dns",
+                 f"name={iface}", "static", v6p, "primary"],
                 timeout=15,
             )
+            if code_v6 == 0 and v6s:
+                _run(
+                    ["netsh", "interface", "ipv6", "add", "dns",
+                     f"name={iface}", v6s, "index=2"],
+                    timeout=15,
+                )
         if code_v4 == 0 or code_v6 == 0:
             n += 1
     if n:
         _run(["ipconfig", "/flushdns"], timeout=10)
-        log.info("Set family DNS (v4+v6) on %d interface(s)", n)
+        log.info("Set %s DNS (v4+v6) on %d interface(s)", name, n)
     return n
 
 
@@ -380,21 +492,21 @@ def _any_iface_has_dns(reg_path: str, dns_ip: str) -> bool:
 
 
 def dns_is_locked() -> bool:
-    """Check if BOTH IPv4 and IPv6 DNS are locked to Cloudflare Family. Reads
-    the registry directly (instant) instead of launching PowerShell.
+    """Check if BOTH IPv4 and IPv6 DNS are locked to *any* family-safe provider
+    in DNS_FALLBACKS. Reads the registry directly (no PowerShell).
 
     Both stacks must be locked: if only IPv4 is locked, Windows prefers the
     DHCPv6-assigned IPv6 DNS (often the router) which may be unstable and
-    breaks resolution. So a half-locked state is treated as 'not locked' to
+    breaks resolution. A half-locked state is treated as 'not locked' to
     trigger a re-apply that fixes both."""
-    v4_ok = _any_iface_has_dns(
-        r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces",
-        FAMILY_DNS_PRIMARY,
-    )
-    v6_ok = _any_iface_has_dns(
-        r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces",
-        FAMILY_DNS_PRIMARY_V6,
-    )
+    v4_root = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
+    v6_root = r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces"
+    v4_ok = any(_any_iface_has_dns(v4_root, v4p) for _, v4p, _, _, _ in DNS_FALLBACKS)
+    # For v6, accept locked if any provider's v6 primary is present, OR if no
+    # provider with v6 is currently set — in that case Cloudflare v6 should
+    # be there.
+    v6_providers = [v6p for _, _, _, v6p, _ in DNS_FALLBACKS if v6p]
+    v6_ok = any(_any_iface_has_dns(v6_root, v6p) for v6p in v6_providers)
     return v4_ok and v6_ok
 
 
