@@ -58,6 +58,17 @@ def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
 
 
 def _add_rule(name: str, remote_ip: str, port: str, protocol: str) -> bool:
+    # CRITICAL: netsh `add rule` does NOT dedup by name — it just appends.
+    # Without this delete-first, every watchdog re-apply doubles, triples,
+    # ... the rule count, eventually reaching 100k+ rules. At that point
+    # Windows Firewall evaluation of new connections becomes so slow that
+    # DNS lookups and new HTTPS handshakes time out while existing sockets
+    # (e.g. an in-progress live stream) keep working. See repair tool
+    # `unstick_sockets.bat` for one-shot cleanup of accumulated duplicates.
+    _run([
+        "netsh", "advfirewall", "firewall", "delete", "rule",
+        f"name={name}",
+    ], timeout=10)
     code, _, err = _run([
         "netsh", "advfirewall", "firewall", "add", "rule",
         f"name={name}",
