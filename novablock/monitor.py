@@ -14,8 +14,6 @@ try:
 except ImportError:
     HAS_WIN32 = False
 
-from .paths import BLOCKLIST_CACHE
-
 log = logging.getLogger("novablock.monitor")
 
 BROWSER_PROCS = {
@@ -76,22 +74,25 @@ class WindowMonitor:
         "download", "downloads", "upload", "uploads", "support", "forum",
         "forums", "blog", "blogs", "news", "store", "shop", "login",
         "signin", "register", "account", "profile", "settings",
+        # Generic web/marketing terms — high false-positive risk when matched
+        # in legitimate site titles. None of these are adult-specific.
+        "advertising", "advertise", "advertisement", "advertiser",
+        "advertisers", "marketing", "analytics", "tracking", "tracker",
+        "trackers", "banner", "banners", "popup", "popups", "promotion",
+        "promotions", "affiliate", "affiliates", "network", "networks",
+        "platform", "service", "services", "system", "systems",
+        "website", "websites", "online", "internet", "browser",
+        "google", "facebook", "youtube", "twitter",
     }
 
     def _load_domains(self) -> None:
+        # Auto-extraction disabled: parsing 50k blocklist domains for ≥6-char
+        # roots produced too many false positives (city names like "annecy",
+        # generic terms like "advertising", brand names, etc.) that blocked
+        # legitimate sites. The blocklist still DNS-blocks those domains, and
+        # ADULT_KEYWORDS covers the title-detection layer with curated terms.
+        # If a porn site slips through, add it to ADULT_KEYWORDS_SUBSTRING.
         self._domain_keywords = []
-        if not BLOCKLIST_CACHE.exists():
-            return
-        try:
-            for line in BLOCKLIST_CACHE.read_text(encoding="utf-8", errors="ignore").splitlines()[:5000]:
-                d = line.strip().lower()
-                if not d or "." not in d:
-                    continue
-                base = d.split(".")[0]
-                if len(base) >= 6 and base not in self._DOMAIN_KEYWORD_BLACKLIST:
-                    self._domain_keywords.append(base)
-        except Exception as e:
-            log.warning("could not load domain keywords: %s", e)
 
     def start(self) -> None:
         if not HAS_WIN32:
