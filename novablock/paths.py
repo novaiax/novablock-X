@@ -12,6 +12,16 @@ LOCK_FILE = PROGRAM_DATA / "novablock.lock"
 # --watchdog reads it to decide whether to re-apply: if the main app is
 # active (recent heartbeat), the headless skips to avoid racing on hosts.
 HEARTBEAT_FILE = PROGRAM_DATA / "watchdog.heartbeat"
+# Mutual-watchdog: the main app and its companion process write their own PID
+# to these files and each polls the other. If one dies, the other relaunches
+# it. Used to defeat one-click 'End task' from Task Manager.
+MAIN_PID_FILE = PROGRAM_DATA / "main.pid"
+COMPANION_PID_FILE = PROGRAM_DATA / "companion.pid"
+# Sentinel file: when present, the companion and main app exit themselves
+# instead of respawning each other. Created only by the verified-code
+# uninstall path. This is how a legitimate shutdown breaks the mutual-
+# resurrection loop.
+SHUTDOWN_SENTINEL = PROGRAM_DATA / "shutdown.sentinel"
 
 WINDOWS_HOSTS = Path(r"C:\Windows\System32\drivers\etc\hosts")
 

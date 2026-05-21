@@ -13,7 +13,7 @@ import sys
 import time
 from logging.handlers import RotatingFileHandler
 
-from . import config, blocker, persistence, single_instance  # noqa: F401
+from . import config, blocker, persistence, single_instance, companion, process_protect  # noqa: F401
 from .paths import HEARTBEAT_FILE, LOG_FILE, PROGRAM_DATA, ensure_dirs
 
 def _load_embedded() -> tuple[str, str]:
@@ -100,6 +100,14 @@ def run_app() -> None:
     # Refresh persistence so updates work without reinstall
     ensure_persistence()
 
+    # Self-harden + spawn the companion process. The companion is a second
+    # NovaBlock.exe (--companion) whose only job is to respawn this main
+    # process if it gets killed. We also watch the companion and respawn it
+    # if it dies. Together with the SYSTEM scheduled task, this makes Task
+    # Manager 'End task' effectively useless: kill one, the other survives
+    # and relaunches it within ~1s.
+    companion_stop = companion.start_companion_supervision()
+
     status = StatusWindow()
     status.root.withdraw()
     BlockedPopup.set_parent_root(status.root)
@@ -141,6 +149,12 @@ def run_app() -> None:
     try:
         status.root.mainloop()
     finally:
+        # Tell the companion-watcher thread to exit. The companion process
+        # itself stays alive — if we're shutting down as part of a legit
+        # uninstall (code verified), it'll see the main PID gone and try
+        # to respawn; the uninstall flow kills it explicitly. If we're
+        # shutting down for any other reason, the respawn is desired.
+        companion_stop.set()
         monitor.stop()
         watchdog.stop()
         tray.stop()
@@ -292,6 +306,18 @@ def run_uninstall_check() -> int:
     if not crypto.verify_code(dlg.result, cfg.get("code_hash", "")):
         ctypes.windll.user32.MessageBoxW(0, "Code incorrect.", "NovaBlock", 0x10)
         return 1
+    # Drop the shutdown sentinel BEFORE removing scheduled tasks. The
+    # companion polls this file every second and exits when it appears,
+    # breaking the mutual-resurrection loop. Without this, removing the
+    # main app would just trigger the companion to respawn it.
+    try:
+        from .paths import SHUTDOWN_SENTINEL, MAIN_PID_FILE, COMPANION_PID_FILE
+        ensure_dirs()
+        SHUTDOWN_SENTINEL.write_text(str(int(time.time())), encoding="utf-8")
+        # Give the companion up to 3s to notice the sentinel and exit.
+        time.sleep(3)
+    except Exception:
+        pass
     blocker.remove_full_block()
     persistence.remove_scheduled_task()
     persistence.remove_logon_task()
@@ -300,6 +326,8 @@ def run_uninstall_check() -> int:
     try:
         from .paths import CONFIG_FILE
         CONFIG_FILE.unlink(missing_ok=True)
+        MAIN_PID_FILE.unlink(missing_ok=True)
+        COMPANION_PID_FILE.unlink(missing_ok=True)
     except Exception:
         pass
     ctypes.windll.user32.MessageBoxW(0, "NovaBlock désinstallé.", "NovaBlock", 0x40)
@@ -313,10 +341,17 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(prog="NovaBlock", add_help=False)
     parser.add_argument("--watchdog", action="store_true", help="Headless watchdog tick (used by scheduler)")
+    parser.add_argument("--companion", action="store_true", help="Mutual-watchdog companion (used by main app)")
     parser.add_argument("--uninstall", action="store_true", help="Finalize uninstall")
     parser.add_argument("--check", action="store_true", help="Run diagnostic")
     parser.add_argument("--reapply", action="store_true", help="Force re-apply blocking")
     args, _ = parser.parse_known_args()
+
+    # --companion runs an extremely lightweight loop that only watches the
+    # main process and respawns it. We harden the process before doing
+    # anything else so the companion itself is hard to kill.
+    if args.companion:
+        return companion.run_companion_loop() or 0
 
     # --watchdog must be invoked by the scheduled task running as SYSTEM.
     # Triggering UAC from a headless boot context fails silently and the
