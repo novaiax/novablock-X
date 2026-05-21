@@ -10,6 +10,7 @@ import ctypes
 import logging
 import os
 import sys
+import threading
 import time
 from logging.handlers import RotatingFileHandler
 
@@ -126,6 +127,29 @@ def run_app() -> None:
     monitor.start()
     watchdog.start()
 
+    # Poll the shutdown sentinel. The verified-code uninstall path and
+    # update.bat both drop this file when they need NovaBlock to step
+    # aside. Since TerminateProcess is blocked by our DACL, this is the
+    # ONLY way external tooling can ask us to exit — by writing a file
+    # we voluntarily check. sys.exit/destroy() are internal to the
+    # process and bypass the kill ACL entirely.
+    sentinel_stop = threading.Event()
+
+    def _sentinel_poller():
+        from .paths import SHUTDOWN_SENTINEL
+        while not sentinel_stop.is_set():
+            if SHUTDOWN_SENTINEL.exists():
+                log.warning("Shutdown sentinel detected — main app exits voluntarily")
+                try:
+                    status.root.after(0, status.root.quit)
+                except Exception:
+                    os._exit(0)
+                return
+            if sentinel_stop.wait(1.0):
+                return
+
+    threading.Thread(target=_sentinel_poller, name="NovaBlockSentinelPoller", daemon=True).start()
+
     def show_status() -> None:
         try:
             status.root.after(0, status.show)
@@ -155,6 +179,7 @@ def run_app() -> None:
         # to respawn; the uninstall flow kills it explicitly. If we're
         # shutting down for any other reason, the respawn is desired.
         companion_stop.set()
+        sentinel_stop.set()
         monitor.stop()
         watchdog.stop()
         tray.stop()

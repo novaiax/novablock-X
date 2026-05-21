@@ -127,9 +127,21 @@ if %DL_SIZE% lss 5000000 (
 echo   Downloaded %DL_SIZE% bytes OK.
 
 REM ----- Step 3: stop running instance (do NOT delete the tasks!) -----
+REM v1.0.15+ hardens the process against TerminateProcess via a deny-ACE
+REM on PROCESS_TERMINATE, so plain taskkill returns Access Denied. Drop
+REM the shutdown sentinel first: the main app and companion both poll
+REM this file every second and exit themselves when it appears (an
+REM internal sys.exit, which is NOT blocked by the kill ACL). We give
+REM them 6 seconds to notice, then fall back to taskkill for older
+REM versions that don't know about the sentinel yet.
 echo [3/6] Stopping NovaBlock to free the exe ^(scheduled tasks kept^)...
 schtasks /End /TN NovaBlockWatchdog >nul 2>&1
 schtasks /End /TN NovaBlockApp >nul 2>&1
+REM Drop sentinel for v1.0.15+ to self-exit
+if not exist "%LOCK_DIR%" mkdir "%LOCK_DIR%" >nul 2>&1
+> "%LOCK_DIR%\shutdown.sentinel" echo update.bat
+timeout /t 6 /nobreak >nul
+REM Fallback: taskkill for older versions or stragglers
 taskkill /F /IM NovaBlock.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
@@ -152,6 +164,9 @@ if %errorlevel% neq 0 (
 
 REM ----- Step 6: relaunch + verify -----
 echo [6/6] Re-launching NovaBlock and verifying it comes up...
+REM Remove sentinel so the new instance doesn't self-exit on startup.
+REM (Belt-and-braces: start_companion_supervision() also clears it.)
+del "%LOCK_DIR%\shutdown.sentinel" >nul 2>&1
 start "" "%INSTALL_PATH%"
 
 REM Wait up to 30s for the new app to write a fresh heartbeat.
@@ -190,6 +205,8 @@ exit /b 0
 
 :cleanup_fail
 del "%LOCK_FILE%" >nul 2>&1
+REM Clear sentinel so the existing (un-updated) NovaBlock can restart
+del "%LOCK_DIR%\shutdown.sentinel" >nul 2>&1
 echo.
 echo ============================================================
 echo Update FAILED. NovaBlock's scheduled task is still in place
