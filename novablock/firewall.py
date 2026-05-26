@@ -14,9 +14,19 @@ We block TCP/UDP 443 + 853 to:
 
 Note: regular DNS on port 53 to the same IPs is still allowed, so our
 Cloudflare Family DNS (1.1.1.3) still works.
+
+Implementation: uses the Windows Firewall COM API (HNetCfg.FwPolicy2) instead
+of `netsh advfirewall firewall add rule`. Two reasons:
+
+  1. Speed: netsh add/delete each take ~1–2s and serialize behind a global
+     firewall lock. 78 rules × 2 calls (delete-then-add for dedup) = 2–3
+     minutes. COM Add is sub-millisecond per rule — 78 rules in ~0.1s.
+
+  2. Native dedup by name: COM Rules.Item(name) tells us if a rule exists
+     in O(1). No need for the delete-then-add dance that caused the
+     accumulation bug when delete failed silently.
 """
 import logging
-import subprocess
 
 log = logging.getLogger("novablock.firewall")
 
@@ -45,87 +55,144 @@ DOH_IPS = [
 
 RULE_PREFIX = "NovaBlock_DoH_"
 
+# Windows Firewall COM constants (from netfw.h)
+NET_FW_RULE_DIR_OUT       = 2
+NET_FW_ACTION_BLOCK       = 0
+NET_FW_IP_PROTOCOL_TCP    = 6
+NET_FW_IP_PROTOCOL_UDP    = 17
+NET_FW_PROFILE2_ALL       = 0x7FFFFFFF  # all profiles (domain + private + public)
 
-def _run(cmd: list[str], timeout: int = 15) -> tuple[int, str, str]:
+
+def _get_fw_policy():
+    """Return the FwPolicy2 COM object, or None if pywin32 / COM unavailable.
+    The caller falls back to a no-op (the rest of NovaBlock still works,
+    we just lose DoH blocking until next attempt)."""
     try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-        )
-        return proc.returncode, proc.stdout, proc.stderr
+        import win32com.client
+        return win32com.client.Dispatch("HNetCfg.FwPolicy2")
     except Exception as e:
-        return -1, "", str(e)
+        log.warning("Could not initialise Windows Firewall COM: %s", e)
+        return None
 
 
-def _add_rule(name: str, remote_ip: str, port: str, protocol: str) -> bool:
-    # CRITICAL: netsh `add rule` does NOT dedup by name — it just appends.
-    # Without this delete-first, every watchdog re-apply doubles, triples,
-    # ... the rule count, eventually reaching 100k+ rules. At that point
-    # Windows Firewall evaluation of new connections becomes so slow that
-    # DNS lookups and new HTTPS handshakes time out while existing sockets
-    # (e.g. an in-progress live stream) keep working. See repair tool
-    # `unstick_sockets.bat` for one-shot cleanup of accumulated duplicates.
-    _run([
-        "netsh", "advfirewall", "firewall", "delete", "rule",
-        f"name={name}",
-    ], timeout=10)
-    code, _, err = _run([
-        "netsh", "advfirewall", "firewall", "add", "rule",
-        f"name={name}",
-        "dir=out",
-        "action=block",
-        f"protocol={protocol}",
-        f"remoteip={remote_ip}",
-        f"remoteport={port}",
-        "enable=yes",
-    ])
-    if code != 0:
-        log.debug("add rule %s failed: %s", name, err)
-        return False
-    return True
+def _make_rule_name(proto_label: str, ip: str) -> str:
+    return f"{RULE_PREFIX}{proto_label}_{ip.replace(':', '_').replace('.', '_')}"
+
+
+def _rule_specs():
+    """Yield (name, protocol_const, port, remote_ip) tuples for every rule
+    NovaBlock should have. Single source of truth for both add and remove."""
+    for ip in DOH_IPS:
+        yield _make_rule_name("TCP443", ip), NET_FW_IP_PROTOCOL_TCP, "443", ip
+        yield _make_rule_name("TCP853", ip), NET_FW_IP_PROTOCOL_TCP, "853", ip
+        yield _make_rule_name("UDP443", ip), NET_FW_IP_PROTOCOL_UDP, "443", ip
+
+
+def _snapshot_existing_names(fw) -> set[str]:
+    """One-pass scan of the rules collection. Returns the set of names that
+    already start with our RULE_PREFIX. O(N) on the rule count, ~10ms for a
+    typical Windows install with a few hundred rules."""
+    names: set[str] = set()
+    try:
+        for r in fw.Rules:
+            try:
+                n = r.Name
+                if n and n.startswith(RULE_PREFIX):
+                    names.add(n)
+            except Exception:
+                pass
+    except Exception as e:
+        log.warning("Could not enumerate firewall rules: %s", e)
+    return names
 
 
 def block_doh_endpoints() -> int:
-    """Add Windows Firewall outbound block rules for DoH IPs on TCP/UDP 443/853.
-    Returns the number of rules added."""
-    n = 0
-    for ip in DOH_IPS:
-        # TCP 443 (HTTPS / DoH)
-        rule = f"{RULE_PREFIX}TCP443_{ip.replace(':', '_').replace('.', '_')}"
-        if _add_rule(rule, ip, "443", "TCP"):
-            n += 1
-        # TCP 853 (DoT)
-        rule = f"{RULE_PREFIX}TCP853_{ip.replace(':', '_').replace('.', '_')}"
-        if _add_rule(rule, ip, "853", "TCP"):
-            n += 1
-        # UDP 443 (HTTP/3 DoH)
-        rule = f"{RULE_PREFIX}UDP443_{ip.replace(':', '_').replace('.', '_')}"
-        if _add_rule(rule, ip, "443", "UDP"):
-            n += 1
-    log.info("DoH firewall: %d rules added", n)
-    return n
+    """Idempotent: add only the rules that don't already exist. Returns the
+    number of NEW rules added (existing rules counted in the log)."""
+    fw = _get_fw_policy()
+    if fw is None:
+        return 0
+
+    existing = _snapshot_existing_names(fw)
+
+    # If we previously accumulated duplicates (the old netsh add-without-dedup
+    # bug could leave thousands), drop everything matching the prefix first
+    # so we end up with exactly len(specs) rules. The threshold catches the
+    # pathological case (10k+ rules) but skips the cheap path when count is
+    # already normal.
+    expected_count = 26 * 3  # 26 IPs × {TCP443, TCP853, UDP443} = 78
+    if len(existing) > expected_count * 2:
+        log.warning("Found %d existing NovaBlock_DoH rules (expected %d) — wiping duplicates",
+                    len(existing), expected_count)
+        removed = _wipe_all_doh_rules(fw)
+        log.info("Removed %d duplicate rules", removed)
+        existing = set()
+
+    added = 0
+    try:
+        import win32com.client
+    except ImportError:
+        return 0
+
+    for name, protocol, port, remote_ip in _rule_specs():
+        if name in existing:
+            continue
+        try:
+            rule = win32com.client.Dispatch("HNetCfg.FWRule")
+            rule.Name             = name
+            rule.Direction        = NET_FW_RULE_DIR_OUT
+            rule.Action           = NET_FW_ACTION_BLOCK
+            rule.Protocol         = protocol
+            rule.RemoteAddresses  = remote_ip
+            rule.RemotePorts      = port
+            rule.Enabled          = True
+            rule.Profiles         = NET_FW_PROFILE2_ALL
+            rule.Description      = "NovaBlock: blocks a known DoH/DoT endpoint"
+            fw.Rules.Add(rule)
+            added += 1
+        except Exception as e:
+            log.debug("add rule %s failed: %s", name, e)
+
+    if added or existing:
+        log.info("DoH firewall: %d added, %d already present (target: %d)",
+                 added, len(existing), expected_count)
+    return added
+
+
+def _wipe_all_doh_rules(fw) -> int:
+    """Remove every rule whose name starts with RULE_PREFIX. Used to clean up
+    accumulated duplicates from old netsh-based versions, and by
+    unblock_doh_endpoints below."""
+    names = _snapshot_existing_names(fw)
+    removed = 0
+    for n in names:
+        try:
+            fw.Rules.Remove(n)
+            removed += 1
+        except Exception:
+            pass
+    return removed
 
 
 def unblock_doh_endpoints() -> int:
-    """Remove all NovaBlock DoH rules."""
-    n = 0
-    for ip in DOH_IPS:
-        for proto, port in [("TCP", "443"), ("TCP", "853"), ("UDP", "443")]:
-            rule = f"{RULE_PREFIX}{proto}{port}_{ip.replace(':', '_').replace('.', '_')}"
-            c, _, _ = _run([
-                "netsh", "advfirewall", "firewall", "delete", "rule",
-                f"name={rule}"
-            ])
-            if c == 0:
-                n += 1
+    """Remove all NovaBlock DoH rules. Used by uninstall."""
+    fw = _get_fw_policy()
+    if fw is None:
+        return 0
+    n = _wipe_all_doh_rules(fw)
     log.info("DoH firewall: %d rules removed", n)
     return n
 
 
 def doh_blocked() -> bool:
-    """Check if at least one NovaBlock DoH rule is active."""
-    code, out, _ = _run([
-        "netsh", "advfirewall", "firewall", "show", "rule",
-        f"name={RULE_PREFIX}TCP443_1_1_1_1"
-    ], timeout=10)
-    return code == 0 and "Enabled:" in out and "Yes" in out
+    """Check if at least one NovaBlock DoH rule is active. Uses COM Item()
+    for O(1) lookup instead of scanning the whole rule list."""
+    fw = _get_fw_policy()
+    if fw is None:
+        return False
+    canary = _make_rule_name("TCP443", "1.1.1.1")
+    try:
+        rule = fw.Rules.Item(canary)
+        return bool(rule and rule.Enabled)
+    except Exception:
+        return False

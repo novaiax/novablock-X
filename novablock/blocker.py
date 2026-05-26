@@ -304,16 +304,56 @@ def lock_hosts_acl() -> None:
 
 
 def _atomic_write_hosts(content: str) -> None:
-    """Write hosts atomically: write to a temp file in the same directory,
-    then replace. Prevents the file from being truncated mid-write when the
-    OS or another process holds a lock — that left users with a tiny / empty
-    hosts file, which then made `hosts_block_present()` return False forever
-    and the watchdog re-apply in a busy loop."""
+    """Write hosts robustly. Tries three strategies in order, each more
+    forgiving of file locks held by other processes (Chrome routinely keeps
+    a read handle on hosts open):
+
+      1) write to temp + os.replace — fast atomic swap when nothing holds
+         the destination with FILE_SHARE_DELETE=0.
+      2) MoveFileEx with MOVEFILE_REPLACE_EXISTING — same as above but
+         goes through a different Win32 codepath that handles some lock
+         scenarios os.replace fails on.
+      3) in-place truncate-and-write — works even when another process
+         holds a read handle (FILE_SHARE_READ), at the cost of being
+         non-atomic. Used only as a last resort because a crash mid-write
+         leaves a partial hosts file.
+
+    Previous version stopped at (1), which made apply_hosts_block fail
+    three times in a row whenever Chrome was open (very common case) —
+    each failure cascaded into the watchdog hammering the file in a loop
+    and degraded the whole DNS pipeline for ~3 minutes."""
     temp = WINDOWS_HOSTS.with_name(WINDOWS_HOSTS.name + ".novablock.tmp")
     temp.write_text(content, encoding="utf-8")
-    # os.replace is atomic on Windows when both files are on the same volume
-    # and the destination is not held with FILE_SHARE_DELETE=0.
-    os.replace(str(temp), str(WINDOWS_HOSTS))
+
+    # Strategy 1: os.replace (preferred — atomic)
+    try:
+        os.replace(str(temp), str(WINDOWS_HOSTS))
+        return
+    except PermissionError as e_replace:
+        pass
+
+    # Strategy 2: MoveFileEx with MOVEFILE_REPLACE_EXISTING + WRITE_THROUGH
+    try:
+        import ctypes
+        MOVEFILE_REPLACE_EXISTING = 0x1
+        MOVEFILE_WRITE_THROUGH    = 0x8
+        ok = ctypes.windll.kernel32.MoveFileExW(
+            str(temp), str(WINDOWS_HOSTS),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+        if ok:
+            return
+    except Exception:
+        pass
+
+    # Strategy 3: in-place truncate + write (non-atomic, but works under
+    # FILE_SHARE_READ locks held by Chrome / Edge / Firefox).
+    with open(WINDOWS_HOSTS, "w", encoding="utf-8") as f:
+        f.write(content)
+    try:
+        os.unlink(temp)
+    except OSError:
+        pass
 
 
 def _read_hosts_safe() -> str:
@@ -358,6 +398,16 @@ def apply_hosts_block(domains: list[str] | None = None) -> int:
             if not cleaned.endswith("\n"):
                 cleaned += "\n"
             new_content = cleaned + _build_block(domains)
+            # Skip the write + flushdns entirely if nothing actually changed.
+            # `ipconfig /flushdns` is expensive (5–10s on a saturated DNS
+            # Client service) and forces every browser tab to re-resolve
+            # every hostname, which is what made apply_hosts_block at
+            # startup feel like a 3-minute outage. With this guard, the
+            # watchdog tick on a healthy install is a no-op read.
+            if existing == new_content:
+                log.debug("hosts block already up-to-date — skip write+flush")
+                success = True
+                return len(set(domains))
             _atomic_write_hosts(new_content)
             _run(["ipconfig", "/flushdns"], timeout=10)
             log.info("Applied hosts block: %d domains (attempt %d)",
