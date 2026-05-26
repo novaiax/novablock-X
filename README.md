@@ -4,6 +4,36 @@
 
 NovaBlock bloque l'accès aux sites pornographiques sur Windows en combinant DNS, fichier hosts, politiques navigateur, monitoring d'écran et pare-feu. Le seul moyen de débloquer est un code de 25 caractères que tu **ne vois jamais** : seul un ami que tu désignes le reçoit par email. Tu lui demandes le code, il décide de te le donner ou pas.
 
+## ⚠️ EMERGENCY RESET — quand plus rien ne marche
+
+Si Chrome tourne en boucle, plus d'internet, NovaBlock ne se laisse plus kill, update.bat échoue, etc. **Dernier recours** qui désactive TOUT (NovaBlock + firewall + DNS hijack + browser policies + hosts) en ~10 secondes :
+
+**Si tu as cloné le repo** : double-clic sur `EMERGENCY_RESET.bat` (auto-élève en admin).
+
+**Si tu n'as rien d'installé localement**, ouvre un **PowerShell admin** (Win+X → Terminal admin) et colle :
+
+```powershell
+iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/EMERGENCY_RESET.ps1)
+```
+
+Ou depuis un **cmd admin** :
+
+```cmd
+powershell -ExecutionPolicy Bypass -Command "iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/EMERGENCY_RESET.ps1)"
+```
+
+Ce que ça fait :
+- Kill NovaBlock + désactive ses scheduled tasks (pas besoin du code 25 chars)
+- Wipe tous les `NovaBlock_DoH_*` firewall rules (via COM, instant)
+- **Désactive le pare-feu Windows complètement** (temporaire)
+- Reset DNS à DHCP sur toutes les interfaces actives
+- Vide entièrement le bloc NovaBlock du fichier hosts
+- Supprime toutes les browser policies (DoH, SafeSearch, YouTube Restrict, Incognito)
+- Kill Chrome / Edge / Brave / Firefox / Opera / Vivaldi
+- Flush DNS + ARP, vérifie la connectivité
+
+**Après ce reset, NovaBlock est complètement OFF.** Pour réactiver : double-clic sur `NovaBlock.exe` (admin) → il refait tout.
+
 ## Installation rapide (pour les utilisateurs)
 
 ### Option A — `.exe` pré-compilé (le plus simple)
