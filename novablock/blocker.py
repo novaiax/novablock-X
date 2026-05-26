@@ -118,11 +118,11 @@ SAFESEARCH_HOSTS_MAP = [
     ("google.co.uk", "216.239.38.120"),
     ("www.google.de", "216.239.38.120"),
     ("google.de", "216.239.38.120"),
-    # YouTube Restricted Mode (Moderate) — restrictmoderate.youtube.com
-    ("www.youtube.com", "216.239.38.119"),
-    ("m.youtube.com", "216.239.38.119"),
-    ("youtubei.googleapis.com", "216.239.38.119"),
-    ("youtube.googleapis.com", "216.239.38.119"),
+    # YouTube Restricted Mode is intentionally NOT enforced here. Google
+    # disables the comments section on every video when Restricted Mode is
+    # active (even Moderate), which makes normal YouTube usage broken.
+    # Porn-on-YouTube is covered by the adult-keyword title monitor and
+    # the hosts blocklist instead.
     # Bing SafeSearch (strict) — strict.bing.com
     ("www.bing.com", "204.79.197.220"),
     ("bing.com", "204.79.197.220"),

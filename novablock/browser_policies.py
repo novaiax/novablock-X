@@ -46,7 +46,10 @@ def apply_chromium_policy(vendor_path: str) -> int:
       - DoH off (forces system DNS resolver, honors hosts file)
       - Incognito disabled (no private browsing bypass)
       - Force Google SafeSearch (filters search results)
-      - Force YouTube Restricted Mode (Moderate, not Strict — Strict over-blocks)
+      - YouTube Restricted Mode DISABLED (Restricted Mode also kills the
+        comments section on every video, which is too intrusive for normal
+        usage — protection of YouTube comes from the title-keyword monitor
+        and the hosts blocklist instead)
       - Block third-party extensions (no SafeSearch override extensions)
     """
     n = 0
@@ -55,17 +58,18 @@ def apply_chromium_policy(vendor_path: str) -> int:
                       winreg.REG_SZ))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "BuiltInDnsClientEnabled", 0))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "IncognitoModeAvailability", 1))
-    # SafeSearch enforcement (Google + YouTube)
-    # Google: ForceGoogleSafeSearch = 1 (only option, on/off)
-    # YouTube: ForceYouTubeRestrict = 1 (Moderate) instead of 2 (Strict).
-    # Strict over-filters: it blocks stand-up, debates, music with parental
-    # advisory, security tutorials, philosophy/society channels, and even
-    # sex-ed content — none of which is the kind of adult content NovaBlock
-    # is meant to filter. Moderate still blocks explicit porn while letting
-    # the rest through. Adult-keyword title detection in monitor.py covers
-    # what slips past Moderate.
+    # SafeSearch enforcement.
+    # Google: ForceGoogleSafeSearch = 1 (search results filtered).
+    # YouTube: NO Restricted Mode policy. The Restricted Mode also disables
+    # the comments section on every video — even legitimate ones — which is
+    # too intrusive for normal usage. Porn protection on YouTube is covered
+    # by (a) the adult-keyword title monitor (popup fires on any title
+    # containing porn/xxx/milf/pornhub/etc.) and (b) the hosts blocklist
+    # (~50k adult-related domains DNS-blocked).
+    # Actively DELETE any previous ForceYouTubeRestrict value so existing
+    # installs cleanly migrate away from the Strict/Moderate setting.
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceGoogleSafeSearch", 1))
-    n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceYouTubeRestrict", 1))
+    _del_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceYouTubeRestrict")
     return n
 
 

@@ -61,12 +61,41 @@ def run_setup() -> bool:
     return wiz.run()
 
 
+def _migrate_hosts_if_youtube_present() -> None:
+    """v1.0.17 migration: previous versions hijacked YouTube DNS to the
+    Restricted Mode IP (216.239.38.119) via hosts file. We dropped that
+    because Restricted Mode also kills the comments section. If we see
+    the old IP still in the hosts file, force a full re-apply so the
+    fresh SAFESEARCH_HOSTS_MAP (without YouTube) takes effect.
+
+    Without this, the hosts entries would only get rewritten the next
+    time hosts_block_present() returns False — i.e. never on a healthy
+    install. So we trigger it explicitly here on startup."""
+    log = logging.getLogger("novablock.migration")
+    try:
+        from .paths import WINDOWS_HOSTS
+        if not WINDOWS_HOSTS.exists():
+            return
+        # Read tail only — the SAFESEARCH map is appended near the end of
+        # the NovaBlock block, before BLOCK_MARKER_END.
+        with open(WINDOWS_HOSTS, "rb") as f:
+            size = WINDOWS_HOSTS.stat().st_size
+            f.seek(max(0, size - 16384))
+            tail = f.read().decode("utf-8", errors="ignore")
+        if "216.239.38.119" in tail:
+            log.info("Detected legacy YouTube Restricted Mode hosts entry — rewriting block")
+            blocker.apply_full_block(kill_browsers=False)
+    except Exception as e:
+        log.warning("youtube hosts migration check failed: %s", e)
+
+
 def ensure_persistence() -> None:
     """At every launch, make sure the scheduled task, registry, and Startup
     shortcut all point to the CURRENT exe path. Three layers so a missing or
     tampered one doesn't kill autostart. In-place updates: overwrite the .exe,
     relaunch, and all three are auto-refreshed."""
     log = logging.getLogger("novablock.persistence_check")
+    _migrate_hosts_if_youtube_present()
     try:
         if not persistence.task_exists():
             log.info("Scheduled task missing — re-installing")
