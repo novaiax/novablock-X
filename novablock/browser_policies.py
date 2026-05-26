@@ -46,7 +46,7 @@ def apply_chromium_policy(vendor_path: str) -> int:
       - DoH off (forces system DNS resolver, honors hosts file)
       - Incognito disabled (no private browsing bypass)
       - Force Google SafeSearch (filters search results)
-      - Force YouTube Restricted Mode (Strict)
+      - Force YouTube Restricted Mode (Moderate, not Strict — Strict over-blocks)
       - Block third-party extensions (no SafeSearch override extensions)
     """
     n = 0
@@ -56,8 +56,16 @@ def apply_chromium_policy(vendor_path: str) -> int:
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "BuiltInDnsClientEnabled", 0))
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "IncognitoModeAvailability", 1))
     # SafeSearch enforcement (Google + YouTube)
+    # Google: ForceGoogleSafeSearch = 1 (only option, on/off)
+    # YouTube: ForceYouTubeRestrict = 1 (Moderate) instead of 2 (Strict).
+    # Strict over-filters: it blocks stand-up, debates, music with parental
+    # advisory, security tutorials, philosophy/society channels, and even
+    # sex-ed content — none of which is the kind of adult content NovaBlock
+    # is meant to filter. Moderate still blocks explicit porn while letting
+    # the rest through. Adult-keyword title detection in monitor.py covers
+    # what slips past Moderate.
     n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceGoogleSafeSearch", 1))
-    n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceYouTubeRestrict", 2))
+    n += int(_set_reg(winreg.HKEY_LOCAL_MACHINE, vendor_path, "ForceYouTubeRestrict", 1))
     return n
 
 
