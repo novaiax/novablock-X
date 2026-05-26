@@ -61,7 +61,11 @@ def harden_current_process() -> bool:
         # 'Everyone' SID — denies the right for absolutely every principal,
         # including the user who launched the process. The process can still
         # exit itself; only external Terminate is blocked.
-        everyone, _, _ = win32security.LookupAccountName("", "Everyone")
+        # Use the literal SID string S-1-1-0 instead of LookupAccountName:
+        # on French Windows the name is "Tout le monde", on German it's
+        # "Jeder", etc. — looking up by localized name fails. The SID is
+        # the same on every system regardless of language.
+        everyone = win32security.ConvertStringSidToSid("S-1-1-0")
         dacl.AddAccessDeniedAce(
             win32security.ACL_REVISION,
             PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME,

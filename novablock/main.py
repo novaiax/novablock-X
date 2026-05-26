@@ -76,13 +76,13 @@ def _migrate_hosts_if_youtube_present() -> None:
         from .paths import WINDOWS_HOSTS
         if not WINDOWS_HOSTS.exists():
             return
-        # Read tail only — the SAFESEARCH map is appended near the end of
-        # the NovaBlock block, before BLOCK_MARKER_END.
-        with open(WINDOWS_HOSTS, "rb") as f:
-            size = WINDOWS_HOSTS.stat().st_size
-            f.seek(max(0, size - 16384))
-            tail = f.read().decode("utf-8", errors="ignore")
-        if "216.239.38.119" in tail:
+        # Read the WHOLE file. The SAFESEARCH map sits near the *top* of
+        # the NovaBlock block (right after the Google entries), but the
+        # ~50k-domain blocklist is between it and the END marker, pushing
+        # the YouTube entry into the middle. A tail-only read misses it.
+        # File is ~2.5MB, fine to load fully on startup.
+        content = WINDOWS_HOSTS.read_text(encoding="utf-8", errors="ignore")
+        if "216.239.38.119" in content:
             log.info("Detected legacy YouTube Restricted Mode hosts entry — rewriting block")
             blocker.apply_full_block(kill_browsers=False)
     except Exception as e:
