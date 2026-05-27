@@ -96,11 +96,21 @@ def apply_firefox_policy() -> int:
     return n
 
 
+CHROMIUM_VENDOR_PATHS = {
+    "Chrome": r"SOFTWARE\Policies\Google\Chrome",
+    "Edge":   r"SOFTWARE\Policies\Microsoft\Edge",
+    "Brave":  r"SOFTWARE\Policies\BraveSoftware\Brave",
+    "Opera":  r"SOFTWARE\Policies\Opera Software\Opera Stable",
+}
+
+
 def apply_all_browser_policies() -> dict:
-    """Apply DoH-off + incognito-off to Chrome, Edge, Brave, Firefox, Opera."""
+    """Apply DoH-off + incognito-off + Reddit NSFW URL blocklist to Chrome,
+    Edge, Brave, Firefox, Opera."""
+    from . import reddit_filter
     results = {}
     try:
-        results["Chrome"] = apply_chromium_policy(r"SOFTWARE\Policies\Google\Chrome")
+        results["Chrome"] = apply_chromium_policy(CHROMIUM_VENDOR_PATHS["Chrome"])
     except Exception as e:
         log.warning("Chrome policy failed: %s", e); results["Chrome"] = 0
     try:
@@ -108,7 +118,7 @@ def apply_all_browser_policies() -> dict:
     except Exception as e:
         log.warning("Edge policy failed: %s", e); results["Edge"] = 0
     try:
-        results["Brave"] = apply_chromium_policy(r"SOFTWARE\Policies\BraveSoftware\Brave")
+        results["Brave"] = apply_chromium_policy(CHROMIUM_VENDOR_PATHS["Brave"])
     except Exception as e:
         log.warning("Brave policy failed: %s", e); results["Brave"] = 0
     try:
@@ -116,10 +126,24 @@ def apply_all_browser_policies() -> dict:
     except Exception as e:
         log.warning("Firefox policy failed: %s", e); results["Firefox"] = 0
     try:
-        results["Opera"] = apply_chromium_policy(r"SOFTWARE\Policies\Opera Software\Opera Stable")
+        results["Opera"] = apply_chromium_policy(CHROMIUM_VENDOR_PATHS["Opera"])
     except Exception as e:
         log.warning("Opera policy failed: %s", e); results["Opera"] = 0
+
+    # Reddit NSFW subreddit blocklist via the Chromium URLBlocklist policy.
+    # Firefox is intentionally skipped — it has no equivalent enterprise
+    # policy; the adult-keyword title monitor handles that path instead.
+    reddit_counts = {}
+    for vendor, path in CHROMIUM_VENDOR_PATHS.items():
+        try:
+            reddit_counts[vendor] = reddit_filter.apply_url_blocklist(path)
+        except Exception as e:
+            log.warning("Reddit URLBlocklist failed for %s: %s", vendor, e)
+            reddit_counts[vendor] = 0
+
     log.info("Browser policies applied: %s", results)
+    log.info("Reddit NSFW URL blocklist applied: %s patterns each",
+             reddit_counts)
     return results
 
 
@@ -138,25 +162,61 @@ def remove_all_browser_policies() -> None:
     for path in paths:
         for key in keys_to_remove:
             _del_reg(winreg.HKEY_LOCAL_MACHINE, path, key)
-    log.info("Browser policies removed")
+    # Also wipe the Reddit URLBlocklist subkey on every Chromium vendor —
+    # leaving it behind after uninstall would keep blocking NSFW subs even
+    # though the rest of NovaBlock is gone.
+    for vendor_path in CHROMIUM_VENDOR_PATHS.values():
+        sub = vendor_path + r"\URLBlocklist"
+        try:
+            # Remove our numeric values; leave any user/admin custom ones.
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, sub, 0,
+                                winreg.KEY_READ | winreg.KEY_SET_VALUE) as k:
+                to_delete: list[str] = []
+                i = 0
+                while True:
+                    try:
+                        name, _val, _type = winreg.EnumValue(k, i)
+                    except OSError:
+                        break
+                    if name.isdigit():
+                        to_delete.append(name)
+                    i += 1
+                for name in to_delete:
+                    try: winreg.DeleteValue(k, name)
+                    except OSError: pass
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            log.debug("URLBlocklist cleanup failed for %s: %s", vendor_path, e)
+    log.info("Browser policies removed (including Reddit URLBlocklist)")
 
 
 def policies_present() -> bool:
-    """Check if at least one browser policy is in place."""
+    """Check if our policies are in place. Returns True only when BOTH the
+    DoH-off baseline AND the Reddit NSFW URLBlocklist are present in Chrome
+    (the most-used browser, used as canary). This way, when we add new
+    policy layers (like Reddit), the watchdog automatically re-applies
+    them on the next tick after an upgrade — no manual intervention."""
+    from . import reddit_filter
+    # 1. DoH-off baseline on Chrome
+    doh_off = False
     try:
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
                             r"SOFTWARE\Policies\Google\Chrome", 0, winreg.KEY_READ) as k:
             v, _ = winreg.QueryValueEx(k, "DnsOverHttpsMode")
-            if v == "off":
-                return True
+            doh_off = (v == "off")
     except Exception:
-        pass
-    try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r"SOFTWARE\Policies\Microsoft\Edge", 0, winreg.KEY_READ) as k:
-            v, _ = winreg.QueryValueEx(k, "DnsOverHttpsMode")
-            if v == "off":
-                return True
-    except Exception:
-        pass
-    return False
+        # Fallback: try Edge as canary
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                r"SOFTWARE\Policies\Microsoft\Edge", 0, winreg.KEY_READ) as k:
+                v, _ = winreg.QueryValueEx(k, "DnsOverHttpsMode")
+                doh_off = (v == "off")
+        except Exception:
+            pass
+    if not doh_off:
+        return False
+    # 2. Reddit URLBlocklist on Chrome (or Edge as fallback)
+    reddit_ok = reddit_filter.urlblocklist_present(r"SOFTWARE\Policies\Google\Chrome") \
+                or reddit_filter.urlblocklist_present(r"SOFTWARE\Policies\Microsoft\Edge")
+    return reddit_ok

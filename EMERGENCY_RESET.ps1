@@ -123,8 +123,18 @@ foreach ($v in $vendors) {
     # Firefox DoH path is nested
     try { Remove-ItemProperty -Path "$v\DNSOverHTTPS" -Name 'Enabled' -ErrorAction Stop } catch {}
     try { Remove-ItemProperty -Path "$v\DNSOverHTTPS" -Name 'Locked'  -ErrorAction Stop } catch {}
+    # Reddit URLBlocklist subkey — wipe NovaBlock's numeric entries
+    $sub = "$v\URLBlocklist"
+    try {
+        if (Test-Path $sub) {
+            Get-Item $sub | ForEach-Object {
+                $_.GetValueNames() | Where-Object { $_ -match '^\d+$' } |
+                    ForEach-Object { Remove-ItemProperty -Path $sub -Name $_ -ErrorAction SilentlyContinue }
+            }
+        }
+    } catch {}
 }
-Write-Host "    OK — browser policies cleared" -ForegroundColor Green
+Write-Host "    OK — browser policies cleared (including Reddit URLBlocklist)" -ForegroundColor Green
 
 # 9. Kill all browsers so they restart fresh
 Write-Host "[9] Killing browsers (they will need to be reopened)..." -ForegroundColor Cyan
