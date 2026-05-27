@@ -47,64 +47,106 @@ REDDIT_HOSTS = [
 # obvious adult-keyword names. Sorted alphabetically for easy maintenance.
 # Add to this list as new ones surface; do not remove entries lightly.
 NSFW_SUBREDDITS = [
-    # General NSFW catch-alls
+    # ---- General NSFW catch-alls ----
     "nsfw", "nsfw_gif", "nsfw_gifs", "nsfw_amateurs", "nsfw411",
+    "nsfw_japan", "nsfw_korea", "nsfw_china", "nsfwfunny",
     "porn", "porninfifteenseconds", "porninaminute", "pornvids",
     "60fpsporn", "highresnsfw", "hardcore", "softcore",
-    "rule34", "rule34lol", "rule34_comics",
-    "freeuse", "tinytits", "biggerthanyouthought",
+    "rule34", "rule34lol", "rule34_comics", "rule34hentai",
+    "freeuse", "tinytits", "biggerthanyouthought", "holdthemoan",
+    "godpussy", "pussy", "pussylips", "labia",
 
-    # GoneWild family (amateur-posted nudes)
+    # ---- GoneWild family ----
     "gonewild", "gonewildplus", "gonewildcurvy", "gonewildtube",
     "gonewildaudio", "gonewildstories", "gonewild30plus",
+    "gonewild_porn", "gonewildchubby", "gonewildhairy",
+    "gonewildsmiles", "gonewildtrans",
     "petitegonewild", "asiansgonewild", "latinagonewild",
     "altgonewild", "ebonygonewild", "indiangw", "irlgonewild",
     "midgetgonewild", "milfgonewild", "uniformporn",
-    "treesgonewild", "gymgonewild",
+    "treesgonewild", "gymgonewild", "workgonewild",
+    "campusgonewild", "officegonewild", "gonewildcollege",
 
-    # Body part / category subs
-    "ass", "asstastic", "facedownassup", "buttsharpies",
+    # ---- Teen-themed (heavy adult skew) ----
+    # All of these match `/r/<sub>` and `/r/<sub>/*` regardless of underscore
+    # tricks; the user reported `teen_pussy` slipping through.
+    "teen_pussy", "teen_porn", "teen_nudes", "teen_sex",
+    "barelylegalteens", "tightteens", "teenporn", "teens",
+    "young", "youngsluts", "youngporn", "youngerwomen",
+    "collegegirl", "collegegirls", "collegesluts", "college_nude",
+    "yummygirls", "fitgirls",
+
+    # ---- Body part / category ----
+    "ass", "asstastic", "facedownassup", "buttsharpies", "bigasses",
+    "bigbutts", "bubblebutts", "datass", "asshole_doctored",
     "boobs", "tits", "boobies", "boobbounce", "burstingout",
-    "thick", "thicc", "thicker", "pawg",
-    "milf", "milfs", "mature", "gilf",
-    "asianhotties", "asiansgw", "asianporn",
-    "ebony", "ebonyteens",
-    "redheads", "blondes", "brunettes",
+    "bigboobs", "bigtits", "smalltits", "perfecttits", "tittyfuck",
+    "thick", "thicc", "thicker", "pawg", "thickwhitegirls",
+    "milf", "milfs", "mature", "gilf", "matureporn",
+    "asianhotties", "asiansgw", "asianporn", "asiansluts",
+    "ebony", "ebonyteens", "ebonyporn", "ebonyhotties",
+    "latinas", "latinasgw", "latinaporn", "indiansgonewild",
+    "redheads", "blondes", "brunettes", "redheadgw",
     "freckles", "tattoos_nsfw", "altgw",
+    "petitegonewild", "petite",
 
-    # Activity / fetish
-    "anal", "analgw", "buttplug", "anal_gifs",
+    # ---- Activity / fetish ----
+    "anal", "analgw", "buttplug", "anal_gifs", "analsex",
     "blowjobs", "blowjobsandwich", "cumsluts", "cumshots",
-    "creampie", "creampies", "facials_official",
-    "doublepenetration", "threesome", "groupsex",
-    "bdsm", "kink", "kinky", "fetish", "femdom",
-    "spanking", "bondage", "rough_sex",
-    "publicflashing", "publicsex", "exhibitionism",
+    "creampie", "creampies", "facials_official", "facials",
+    "bukkake", "deepthroat", "gangbangs",
+    "doublepenetration", "threesome", "groupsex", "orgy",
+    "bdsm", "kink", "kinky", "fetish", "femdom", "submissive",
+    "spanking", "bondage", "rough_sex", "ropebondage",
+    "publicflashing", "publicsex", "exhibitionism", "flashing",
+    "voyeur", "creepshots", "candidfashionpolice",
+    "feet", "footfetish", "feet_nsfw",
+    "fitnesssex", "yogapants", "yogapantsnsfw", "leggings",
+    "stockings", "stockingsgw", "lingerie", "lingerieGW",
+    "see_through", "seethru", "braless", "nopanties",
+    "watersports", "scat", "vore",     # extreme — keep blocked
 
-    # Hentai / drawn
-    "hentai", "rule34hentai", "hentaiporn",
+    # ---- Hentai / anime adult ----
+    "hentai", "hentaiporn", "doujinshi",
     "ecchi", "anime_titties", "thick_hentai",
+    "rule34cartoons", "rule34overwatch", "rule34_anime",
+    "drawnporn", "drawnsex",
 
-    # LGBT NSFW
-    "gaybrosgonewild", "gaysex", "gaybears",
-    "girlsfinishingthejob", "lesbians", "lesbianpornhd",
-    "transporn", "tgirls", "trapsgonewild",
+    # ---- LGBT NSFW ----
+    "gaybrosgonewild", "gaysex", "gaybears", "gaymers_gone_mild",
+    "girlsfinishingthejob", "lesbians", "lesbianpornhd", "lesbiangw",
+    "transporn", "tgirls", "trapsgonewild", "shemales",
+    "ftmporn", "mtfporn",
 
-    # Couples / amateurs
+    # ---- Couples / amateur / homemade ----
     "couplesgonewild", "amateur", "amateurcumsluts", "realamateurs",
-    "homemade", "homemadexxx", "amateurfetish",
+    "homemade", "homemadexxx", "amateurfetish", "realsexvideos",
+    "snapchatporn", "personalvideos",
 
-    # Dating / contact subs (where porn typically gets traded)
+    # ---- Hotwife / cuckold / swing ----
+    "hotwife", "asianhotwife", "cuckold", "cuck", "cuckolds",
+    "wifesharing", "wifesgonewild", "wifeslut",
+
+    # ---- Dating / hook-up subs (porn-trading magnets) ----
     "dirtyr4r", "r4r", "gonewildchat", "sext", "sextingtok",
-    "nsfwsnap", "snapleaks", "snapchatsex",
+    "nsfwsnap", "snapleaks", "snapchatsex", "kik_sext",
+    "kikporn", "discordhookup", "discordsext",
 
-    # Cosplay / fitness NSFW spinoffs
+    # ---- Cosplay / NSFW spinoffs ----
     "nsfwcosplay", "cosplayporn", "cosplaybutts",
-    "fitgirls", "fitness_nsfw",
+    "fitness_nsfw", "yogagonewild",
 
-    # OnlyFans / leak-aggregation
-    "onlyfans", "onlyfansgirls101", "onlyfansadvice",
-    "fansly", "leakedmodels", "fansonly",
+    # ---- OnlyFans / leak aggregation ----
+    "onlyfans", "onlyfansgirls101", "onlyfansadvice", "onlyfansgirls",
+    "fansly", "leakedmodels", "fansonly", "leakwave",
+    "of_leaks", "onlyfansleaks", "fansleaks",
+
+    # ---- Niche / specific ----
+    "porn_gifs", "verticalgifs", "porninthewild",
+    "milfsgonewild", "moms", "incest", "stepmom", "stepsister",
+    "agedbeauty", "older", "olderwomen",
+    "jav", "javdownloadcenter", "asianjav",
+    "premiumhentai", "yiff", "furryporn",
 ]
 
 

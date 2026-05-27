@@ -31,6 +31,16 @@ ADULT_KEYWORDS_SUBSTRING = [
     # Common French queries that surface adult content via search engines
     "video x ", "film x ", "video porno", "site porno",
     "ya.ru",
+    # Major paysite brands — almost never appear inside an unrelated word
+    "brazzers", "bangbros", "naughtyamerica", "evilangel",
+    "realitykings", "bellesa", "twistys", "vixenx",
+    "pornstar", "porngif", "pornpic", "porntube", "amateurporn",
+    "sexstories", "literotica", "imagefap", "fapdu", "fappening",
+    "javhd", "javbus", "javdoe", "javfinder",
+    "cumtribute", "cumshow", "cumpilation",
+    "tnaflix", "elephantlist", "definebabe", "babesource",
+    "motherless", "heavy-r", "thumbzilla", "drtuber",
+    "kink.com", "wickedpictures", "digitalplayground",
 ]
 
 # Keywords that must match as a whole word — they are too short or too close
@@ -42,26 +52,54 @@ ADULT_KEYWORDS_SUBSTRING = [
 #   "tits"   → rare but "tit" appears in some words
 #   "naked"  → "naked-eye observation"
 ADULT_KEYWORDS_WORD = [
+    # Existing core list
     "nsfw", "nude", "nudes", "naked", "boobs", "tits", "fap",
     "anal", "blowjob", "erotic", "erotique",
     "hardcore", "softcore", "leaked",
     "cam girl", "tube8",
-    # Short adult terms — only safe as whole-word match.
-    # "sex" alone catches Reddit/Google/YouTube search pages where the
-    # query appears in the title ('"sex" - Reddit', 'sex - YouTube').
-    # Accepted false-positive cost: "Sex Education" (Netflix), gendered
-    # form fields ("Sex: Male/Female"), "Sex and the City" titles. Yann
-    # explicitly asked for this — he'd rather see those popups than have
-    # the search results page load.
-    # Word-boundary match excludes "Essex", "Sussex", "sextant",
-    # "sexagenarian", "sexton", "Tesla SEX-CUV" (none would trigger).
-    "sex", "sexe",
-    # Other common adult-search tokens — also word-bounded to avoid
-    # collateral matches:
-    #   "fuck"  → does NOT match "fucsia", "Fuctaev", etc.
-    #   "pussy" → does NOT match "pussycat" via boundary (but matches
-    #             "pussy" alone, e.g. titles of pet articles — accepted)
-    "fuck", "pussy",
+
+    # Search-bar / generic adult terms (catch reddit/google/youtube
+    # search pages where the query is the page title)
+    "sex", "sexe", "sexy", "fuck", "fucking", "pussy",
+
+    # Anatomy and explicit acts. All whole-word — false positives noted.
+    "cock", "cocks",          # NOT "cockpit", "peacock", "cocktail" (substring-safe)
+    "dick", "dicks",          # WILL match "Dick Cheney", "Moby Dick"; accepted
+    "tit",                    # complements "tits"
+    "cum", "cums", "cumshot", "cumshots", "creampie", "creampies",
+    "jizz", "semen",
+    "bukkake", "deepthroat", "deepthroating",
+    "gangbang", "gangbanged", "threesome", "foursome",
+    "handjob", "handjobs", "rimjob", "footjob",
+    "pegging", "fingering",
+    "horny",
+
+    # Categories / fetishes
+    "bbw", "gilf", "dilf", "twink",
+    "ahegao", "gape", "gaping",
+    "kink", "kinky", "fetish", "femdom", "bdsm",
+    "shemale", "tranny", "trans porn",
+    "pawg",                   # phat-ass-white-girl (porn term)
+    "thicc",
+    "petite",                 # WILL match "petite robe" (French); accepted
+    "yiff",                   # furry porn
+    "snuff",                  # extreme
+
+    # Step / incest themes (very common porn tropes)
+    "incest", "stepmom", "stepmoms", "stepsis", "stepsister",
+    "stepdaughter", "stepson", "stepbro", "stepbrother",
+
+    # Slang
+    "slut", "sluts", "whore", "whores", "thot", "thots",
+
+    # Camera / cam-girl
+    "webcam girl", "live cam", "camgirl",
+
+    # OnlyFans / leak ecosystem
+    "leaks", "leak pack", "of leaks", "fansleaks",
+
+    # Reddit-specific NSFW labels (low false-positive risk on word boundary)
+    "r4r", "ddlg", "ddlb",
 ]
 
 # Backward-compat alias (some external code may still reference ADULT_KEYWORDS)
