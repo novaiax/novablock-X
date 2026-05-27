@@ -46,6 +46,22 @@ ADULT_KEYWORDS_WORD = [
     "anal", "blowjob", "erotic", "erotique",
     "hardcore", "softcore", "leaked",
     "cam girl", "tube8",
+    # Short adult terms — only safe as whole-word match.
+    # "sex" alone catches Reddit/Google/YouTube search pages where the
+    # query appears in the title ('"sex" - Reddit', 'sex - YouTube').
+    # Accepted false-positive cost: "Sex Education" (Netflix), gendered
+    # form fields ("Sex: Male/Female"), "Sex and the City" titles. Yann
+    # explicitly asked for this — he'd rather see those popups than have
+    # the search results page load.
+    # Word-boundary match excludes "Essex", "Sussex", "sextant",
+    # "sexagenarian", "sexton", "Tesla SEX-CUV" (none would trigger).
+    "sex", "sexe",
+    # Other common adult-search tokens — also word-bounded to avoid
+    # collateral matches:
+    #   "fuck"  → does NOT match "fucsia", "Fuctaev", etc.
+    #   "pussy" → does NOT match "pussycat" via boundary (but matches
+    #             "pussy" alone, e.g. titles of pet articles — accepted)
+    "fuck", "pussy",
 ]
 
 # Backward-compat alias (some external code may still reference ADULT_KEYWORDS)
