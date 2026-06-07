@@ -10,7 +10,7 @@ from typing import Optional
 
 import requests
 
-from . import config, crypto, mailer, blocker, persistence
+from . import config, crypto, mailer, blocker, persistence, browser_policies
 
 log = logging.getLogger("novablock.gui")
 
@@ -899,33 +899,77 @@ class StatusWindow:
         dlg = tk.Toplevel(self.root)
         dlg.title("Bloquer un site")
         dlg.configure(bg=BG)
-        _center(dlg, 480, 220)
+        _center(dlg, 520, 340)
         dlg.transient(self.root)
         dlg.grab_set()
 
-        tk.Label(dlg, text="Domaine à bloquer", font=FONT_MD, fg=ACCENT, bg=BG).pack(anchor="w", padx=20, pady=(20, 4))
-        tk.Label(dlg, text="Exemple : tiktok.com, instagram.com, twitter.com",
-                 font=FONT_SM, fg=MUTED, bg=BG).pack(anchor="w", padx=20)
+        tk.Label(dlg, text="Ce que je veux bloquer",
+                 font=FONT_MD, fg=ACCENT, bg=BG).pack(anchor="w", padx=20, pady=(20, 4))
+
+        # Radio: scope = "domain" | "url"
+        scope = tk.StringVar(value="domain")
+        radio_frame = tk.Frame(dlg, bg=BG)
+        radio_frame.pack(fill="x", padx=20, pady=(0, 8))
+        tk.Radiobutton(
+            radio_frame, text="Le site complet (ex. tiktok.com)",
+            variable=scope, value="domain",
+            font=FONT_SM, fg=ACCENT, bg=BG, selectcolor=BG, anchor="w",
+        ).pack(fill="x", anchor="w")
+        tk.Radiobutton(
+            radio_frame, text="Juste cette adresse précise (ex. movix.cash/movie/abc)",
+            variable=scope, value="url",
+            font=FONT_SM, fg=ACCENT, bg=BG, selectcolor=BG, anchor="w",
+        ).pack(fill="x", anchor="w")
+
+        label = tk.Label(dlg, text="Domaine :", font=FONT_SM, fg=ACCENT, bg=BG)
+        label.pack(anchor="w", padx=20, pady=(8, 2))
+        hint = tk.Label(dlg, text="Exemple : tiktok.com, instagram.com, twitter.com",
+                        font=FONT_SM, fg=MUTED, bg=BG)
+        hint.pack(anchor="w", padx=20)
         entry = tk.Entry(dlg, font=FONT_MD, relief="solid", bd=1)
         entry.pack(fill="x", padx=20, pady=8, ipady=4)
         entry.focus_set()
+
+        def _update_hint(*_):
+            if scope.get() == "domain":
+                label.config(text="Domaine :")
+                hint.config(text="Exemple : tiktok.com, instagram.com, twitter.com")
+            else:
+                label.config(text="URL précise :")
+                hint.config(text="Exemple : https://movix.cash/movie/abc123 — seule cette page est bloquée")
+        scope.trace_add("write", _update_hint)
+
         warn = tk.Label(dlg, text="⚠️  Tu pourras le rajouter mais le retirer demandera le code de ton ami.",
-                        font=("Segoe UI", 9), fg=PRIMARY, bg=BG, wraplength=440, justify="left")
-        warn.pack(anchor="w", padx=20)
+                        font=("Segoe UI", 9), fg=PRIMARY, bg=BG, wraplength=480, justify="left")
+        warn.pack(anchor="w", padx=20, pady=(8, 0))
 
         def _add():
-            d = entry.get().strip()
-            added = config.add_custom_domain(d)
-            if not added:
-                self.feedback_lbl.config(text=f"✗ Domaine invalide : {d}", fg=PRIMARY)
-                dlg.destroy()
-                return
-            try:
-                blocker.apply_full_block(kill_browsers=False)
-            except Exception as e:
-                log.exception("apply_full_block failed: %s", e)
-            self.feedback_lbl.config(text=f"✓ {added} bloqué. Redémarre tes navigateurs pour effet immédiat.",
-                                     fg="#00b894")
+            raw = entry.get().strip()
+            if scope.get() == "domain":
+                added = config.add_custom_domain(raw)
+                if not added:
+                    self.feedback_lbl.config(text=f"✗ Domaine invalide : {raw}", fg=PRIMARY)
+                    dlg.destroy()
+                    return
+                # Domains hit the hosts file
+                try:
+                    blocker.apply_full_block(kill_browsers=False)
+                except Exception as e:
+                    log.exception("apply_full_block failed: %s", e)
+                msg = f"✓ {added} bloqué. Redémarre tes navigateurs pour effet immédiat."
+            else:
+                added = config.add_custom_url(raw)
+                if not added:
+                    self.feedback_lbl.config(text=f"✗ URL invalide : {raw}", fg=PRIMARY)
+                    dlg.destroy()
+                    return
+                # URLs hit the Chromium URLBlocklist policy
+                try:
+                    browser_policies.apply_all_browser_policies()
+                except Exception as e:
+                    log.exception("apply_all_browser_policies failed: %s", e)
+                msg = f"✓ {added} bloqué. Redémarre tes navigateurs pour effet immédiat."
+            self.feedback_lbl.config(text=msg, fg="#00b894")
             dlg.destroy()
             self._refresh()
 
@@ -938,8 +982,11 @@ class StatusWindow:
         entry.bind("<Return>", lambda _e: _add())
 
     def _remove_custom_site(self) -> None:
-        customs = config.get_custom_domains()
-        if not customs:
+        # Both lists shown in the same UI — the user picks any combination.
+        # Internally we route each removal to the right config function.
+        custom_domains = config.get_custom_domains()
+        custom_urls = config.get_custom_urls()
+        if not custom_domains and not custom_urls:
             messagebox.showinfo("Aucun site", "Tu n'as ajouté aucun site manuellement.")
             return
 
@@ -957,7 +1004,7 @@ class StatusWindow:
         dlg = tk.Toplevel(self.root)
         dlg.title("Retirer un site bloqué")
         dlg.configure(bg=BG)
-        _center(dlg, 460, 380)
+        _center(dlg, 540, 420)
         dlg.transient(self.root)
         dlg.grab_set()
 
@@ -968,25 +1015,48 @@ class StatusWindow:
         inner = tk.Frame(canvas, bg="white")
         canvas.create_window((0, 0), window=inner, anchor="nw")
 
-        vars_: dict[str, tk.BooleanVar] = {}
-        for d in customs:
+        # Each row: (kind, value) -> BooleanVar.
+        # kind = "domain" or "url" tells _remove which config call to use.
+        vars_: dict[tuple[str, str], tk.BooleanVar] = {}
+        for d in custom_domains:
             v = tk.BooleanVar(value=False)
-            vars_[d] = v
+            vars_[("domain", d)] = v
             tk.Checkbutton(inner, text=d, variable=v, font=FONT_SM, bg="white",
+                           fg=ACCENT, anchor="w").pack(fill="x", anchor="w", padx=8, pady=2)
+        for u in custom_urls:
+            v = tk.BooleanVar(value=False)
+            vars_[("url", u)] = v
+            tk.Checkbutton(inner, text=u, variable=v, font=FONT_SM, bg="white",
                            fg=ACCENT, anchor="w").pack(fill="x", anchor="w", padx=8, pady=2)
         inner.update_idletasks()
         canvas.config(scrollregion=canvas.bbox("all"))
 
         def _remove():
             removed = []
-            for d, v in vars_.items():
-                if v.get() and config.remove_custom_domain(d):
-                    removed.append(d)
+            domain_changed = False
+            url_changed = False
+            for (kind, value), v in vars_.items():
+                if not v.get():
+                    continue
+                if kind == "domain" and config.remove_custom_domain(value):
+                    removed.append(value)
+                    domain_changed = True
+                elif kind == "url" and config.remove_custom_url(value):
+                    removed.append(value)
+                    url_changed = True
             if removed:
-                try:
-                    blocker.apply_full_block(kill_browsers=False)
-                except Exception as e:
-                    log.exception("apply_full_block: %s", e)
+                # Only re-apply what was actually changed — saves the slow
+                # hosts rewrite when only URLs were removed and vice versa.
+                if domain_changed:
+                    try:
+                        blocker.apply_full_block(kill_browsers=False)
+                    except Exception as e:
+                        log.exception("apply_full_block: %s", e)
+                if url_changed:
+                    try:
+                        browser_policies.apply_all_browser_policies()
+                    except Exception as e:
+                        log.exception("apply_all_browser_policies: %s", e)
                 self.feedback_lbl.config(text=f"✓ Retirés : {', '.join(removed)}", fg="#00b894")
             else:
                 self.feedback_lbl.config(text="Aucun site sélectionné.", fg=MUTED)

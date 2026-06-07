@@ -212,9 +212,15 @@ def build_url_blocklist() -> list[str]:
     return patterns
 
 
-def apply_url_blocklist(vendor_path: str) -> int:
+def apply_url_blocklist(vendor_path: str, extra_patterns: list[str] | None = None) -> int:
     """Write the NSFW blocklist into <vendor_path>\\URLBlocklist as numbered
     REG_SZ values. Returns the number of patterns successfully written.
+
+    extra_patterns: optional list of additional patterns to write alongside
+    the curated Reddit NSFW list. Used by browser_policies to merge the
+    user's custom URL blocks (config.custom_blocked_urls) into the same
+    sequence — Chrome only honors one URLBlocklist policy per vendor, so
+    everything has to be written together.
 
     vendor_path examples:
         SOFTWARE\\Policies\\Google\\Chrome
@@ -223,7 +229,14 @@ def apply_url_blocklist(vendor_path: str) -> int:
     """
     _clear_urlblocklist_subkey(vendor_path)
     sub = vendor_path + r"\URLBlocklist"
-    patterns = build_url_blocklist()
+    patterns = list(build_url_blocklist())
+    if extra_patterns:
+        # Dedupe by string equality, preserve order: Reddit first then custom
+        seen = set(patterns)
+        for p in extra_patterns:
+            if p not in seen:
+                patterns.append(p)
+                seen.add(p)
     n = 0
     for idx, pattern in enumerate(patterns, start=1):
         if _safe_set_reg_string(sub, str(idx), pattern):

@@ -130,20 +130,27 @@ def apply_all_browser_policies() -> dict:
     except Exception as e:
         log.warning("Opera policy failed: %s", e); results["Opera"] = 0
 
-    # Reddit NSFW subreddit blocklist via the Chromium URLBlocklist policy.
-    # Firefox is intentionally skipped — it has no equivalent enterprise
-    # policy; the adult-keyword title monitor handles that path instead.
-    reddit_counts = {}
+    # Combined URLBlocklist: curated Reddit NSFW seed list + the user's own
+    # precise-URL custom blocks (from config.custom_blocked_urls). Written
+    # together as one numbered REG_SZ sequence under each Chromium vendor's
+    # URLBlocklist subkey. Firefox is intentionally skipped — no equivalent
+    # enterprise policy; the title monitor handles its path.
+    from . import config
+    custom_urls = config.get_custom_urls()
+    blocklist_counts = {}
     for vendor, path in CHROMIUM_VENDOR_PATHS.items():
         try:
-            reddit_counts[vendor] = reddit_filter.apply_url_blocklist(path)
+            extra_patterns = list(custom_urls)
+            blocklist_counts[vendor] = reddit_filter.apply_url_blocklist(
+                path, extra_patterns=extra_patterns,
+            )
         except Exception as e:
-            log.warning("Reddit URLBlocklist failed for %s: %s", vendor, e)
-            reddit_counts[vendor] = 0
+            log.warning("URLBlocklist apply failed for %s: %s", vendor, e)
+            blocklist_counts[vendor] = 0
 
     log.info("Browser policies applied: %s", results)
-    log.info("Reddit NSFW URL blocklist applied: %s patterns each",
-             reddit_counts)
+    log.info("URLBlocklist applied (Reddit NSFW + %d custom URLs): %s patterns each",
+             len(custom_urls), blocklist_counts)
     return results
 
 
