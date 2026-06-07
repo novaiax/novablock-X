@@ -69,6 +69,26 @@ EXTRA_DOMAINS = [
 # By default we DON'T block DuckDuckGo (legit privacy search) — only Yandex.
 EXTRA_DOMAINS = [d for d in EXTRA_DOMAINS if "duckduckgo" not in d]
 
+
+# Hostname whitelist: never write these into the hosts block, even if the
+# StevenBlack adult list (50k domains) contains them. Used for legitimate
+# sites that get false-flagged as adult by upstream aggregators — typically
+# streaming platforms, news sites, or community subdomains that occasionally
+# host adult content but are mostly fine.
+#
+# Protection still applies to genuinely adult titles via the window-title
+# monitor in monitor.py (porn/sex/milf/etc. in the page title triggers the
+# popup regardless of which site they're on).
+#
+# Maintenance: add domains as users report false positives. Both the bare
+# and the `www.` form should be listed to cover every redirect path.
+DOMAIN_WHITELIST = {
+    # Streaming platforms occasionally flagged because they index pirated
+    # content (mostly mainstream films, not porn). The title monitor still
+    # blocks any film with porn-keyword titles.
+    "movix.cash", "www.movix.cash",
+}
+
 FAMILY_DNS_PRIMARY = "1.1.1.3"
 FAMILY_DNS_SECONDARY = "1.0.0.3"
 # Cloudflare Family DNS in IPv6 — equivalent to 1.1.1.3 / 1.0.0.3. Required
@@ -397,6 +417,11 @@ def apply_hosts_block(domains: list[str] | None = None) -> int:
             cleaned = _strip_block(existing)
             if not cleaned.endswith("\n"):
                 cleaned += "\n"
+            # Filter out whitelisted domains. The StevenBlack adult list is
+            # broad and occasionally catches mainstream sites; the whitelist
+            # is the single source of truth for sites the user explicitly
+            # allowed even if upstream classifies them as adult.
+            domains = [d for d in domains if d.lower().strip() not in DOMAIN_WHITELIST]
             new_content = cleaned + _build_block(domains)
             # Skip the write + flushdns entirely if nothing actually changed.
             # `ipconfig /flushdns` is expensive (5–10s on a saturated DNS

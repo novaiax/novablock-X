@@ -85,6 +85,15 @@ def _migrate_hosts_if_youtube_present() -> None:
         if "216.239.38.119" in content:
             log.info("Detected legacy YouTube Restricted Mode hosts entry — rewriting block")
             blocker.apply_full_block(kill_browsers=False)
+            return
+        # Whitelist migration: if any DOMAIN_WHITELIST entry is still in the
+        # hosts block (left over from before the user / a release added it
+        # to the whitelist), force a rewrite to drop it.
+        for d in blocker.DOMAIN_WHITELIST:
+            if f" {d}\n" in content or f" {d}\r" in content:
+                log.info("Detected whitelisted domain %s still in hosts — rewriting", d)
+                blocker.apply_full_block(kill_browsers=False)
+                return
     except Exception as e:
         log.warning("youtube hosts migration check failed: %s", e)
 
