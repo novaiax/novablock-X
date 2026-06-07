@@ -37,7 +37,19 @@ def _should_send(reason: str) -> bool:
 
 
 def send_tamper_alert(reason: str, detail: str = "") -> bool:
-    """Send an email to the accountability partner about a tampering attempt."""
+    """Send an email to the accountability partner about a tampering attempt.
+
+    Per user policy: only ACTUAL deactivation attempts trigger an email.
+    Auto-recoverable maintenance events (the watchdog noticed hosts/DNS/
+    policies/firewall got removed and put them back) are logged but no
+    longer spam Cyril — they fire whenever EMERGENCY_RESET runs, when an
+    OS update touches scheduled tasks, when a browser update wipes
+    policies temporarily, etc. The legitimate code-request flow (user
+    clicks 'Demander le code') sends through mailer.py, not here.
+    """
+    if reason not in ALLOWED_ALERT_REASONS:
+        log.info("Tamper '%s' detected — auto-restored, not alerting Cyril", reason)
+        return False
     if not _should_send(reason):
         log.info("Tamper alert '%s' suppressed (cooldown)", reason)
         return False
@@ -98,7 +110,10 @@ def send_tamper_alert(reason: str, detail: str = "") -> bool:
         return False
 
 
-# Tamper reasons (used as keys for cooldown dedup)
+# Tamper reasons (used as keys for cooldown dedup).
+# Only the two reasons in ALLOWED_ALERT_REASONS actually email Cyril; the
+# rest are kept as constants so call sites stay descriptive in the logs,
+# but send_tamper_alert short-circuits before sending.
 HOSTS_REMOVED = "hosts_block_removed"
 DNS_REVERTED = "dns_reverted"
 POLICIES_REMOVED = "browser_policies_removed"
@@ -106,3 +121,21 @@ FIREWALL_REMOVED = "doh_firewall_removed"
 TASK_DELETED = "scheduled_task_deleted"
 UNINSTALL_BYPASS = "uninstall_before_cooldown"
 WRONG_CODE_FLOOD = "repeated_wrong_codes"
+DNS_FAILSAFE = "dns_failsafe_dhcp_fallback"
+
+
+# The whitelist of reasons that trigger an actual email to Cyril.
+# Per user policy: only real attempts to disable NovaBlock are escalated.
+#   - UNINSTALL_BYPASS: user ran the official uninstall path before the
+#     7-day cooldown elapsed — a deliberate attempt to deactivate.
+#   - WRONG_CODE_FLOOD: repeated failed code verifications — brute-force
+#     of the 25-char code, also a deliberate attempt.
+# Everything else (HOSTS_REMOVED, DNS_REVERTED, POLICIES_REMOVED, etc.)
+# is a maintenance event the watchdog auto-recovers from within seconds.
+# Those fire on legitimate side-effects (EMERGENCY_RESET, OS updates,
+# browser-policy refresh by Windows, an antivirus quarantining a temp
+# file) and were spamming Cyril for no real signal.
+ALLOWED_ALERT_REASONS = {
+    UNINSTALL_BYPASS,
+    WRONG_CODE_FLOOD,
+}
