@@ -108,15 +108,21 @@ FAMILY_DNS_SECONDARY_V6 = "2606:4700:4700::1003"
 # separately).
 DNS_FALLBACKS = [
     # (name, v4_primary, v4_secondary, v6_primary, v6_secondary)
+    # Quad9 first: less aggressive than Cloudflare Family on category
+    # 'streaming' / 'piracy' so legit streaming sites (movix.cash,
+    # movix.golf, etc.) resolve normally. Still blocks the major porn
+    # domains, which are also caught at the hosts-file layer anyway
+    # (the 50k blocklist contains pornhub/xvideos/xhamster etc.).
+    # Cloudflare Family stays as a fallback if Quad9 is unreachable.
+    ("Quad9 (security + family)",
+     "9.9.9.10", "149.112.112.10",
+     "2620:fe::10", "2620:fe::fe:10"),
     ("Cloudflare Family",
      "1.1.1.3", "1.0.0.3",
      "2606:4700:4700::1113", "2606:4700:4700::1003"),
     ("OpenDNS FamilyShield",
      "208.67.222.123", "208.67.220.123",
      "", ""),
-    ("Quad9 (security + family)",
-     "9.9.9.10", "149.112.112.10",
-     "2620:fe::10", "2620:fe::fe:10"),
     ("CleanBrowsing Family",
      "185.228.168.168", "185.228.169.168",
      "2a0d:2a00:1::", "2a0d:2a00:2::"),
