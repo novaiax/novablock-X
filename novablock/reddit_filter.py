@@ -88,7 +88,7 @@ NSFW_SUBREDDITS = [
     "latinas", "latinasgw", "latinaporn", "indiansgonewild",
     "redheads", "blondes", "brunettes", "redheadgw",
     "freckles", "tattoos_nsfw", "altgw",
-    "petitegonewild", "petite",
+    "petitegonewild",
 
     # ---- Activity / fetish ----
     "anal", "analgw", "buttplug", "anal_gifs", "analsex",

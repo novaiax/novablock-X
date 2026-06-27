@@ -81,7 +81,6 @@ ADULT_KEYWORDS_WORD = [
     "shemale", "tranny", "trans porn",
     "pawg",                   # phat-ass-white-girl (porn term)
     "thicc",
-    "petite",                 # WILL match "petite robe" (French); accepted
     "yiff",                   # furry porn
     "snuff",                  # extreme
 
