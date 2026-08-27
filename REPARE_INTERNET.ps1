@@ -176,6 +176,53 @@ foreach ($l in @('Microsoft-Windows-NDIS/Operational',
     if ($LASTEXITCODE -eq 0) { OK "$l active" } else { Souci "$l : echec" }
 }
 
+# --- 5b. Regles pare-feu dupliquees (LA cause dominante) ---
+Titre "5b. Regles pare-feu NovaBlock dupliquees"
+# NovaBlock doit avoir 78 regles DoH. Un bug de comptage les a laissees se
+# dupliquer ~1200 fois chacune sur une machine : 93723 regles au lieu de 78.
+# Le service pare-feu doit toutes les charger au demarrage, ce qui gele la
+# pile reseau et laisse le reseau sur "Identification" pendant des minutes.
+# netsh (84 s par nom) et COM Remove (1183 ms par regle) sont inutilisables
+# a cette echelle car chaque appel recharge toute la politique. On passe donc
+# par le registre, qui fait le meme travail en quelques secondes.
+$sub = 'SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
+try {
+    $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($sub, $false)
+    $doublons = New-Object System.Collections.Generic.List[string]
+    $garder = 0
+    foreach ($n in $k.GetValueNames()) {
+        if ([string]$k.GetValue($n) -match 'Name=NovaBlock_DoH_') { $doublons.Add($n) } else { $garder++ }
+    }
+    $k.Close()
+    Info "Regles NovaBlock : $($doublons.Count)   |   autres regles : $garder"
+
+    if ($doublons.Count -le 200) {
+        OK "Nombre normal - rien a nettoyer"
+    } elseif ($garder -lt 20) {
+        Souci "Trop peu de regles a conserver ($garder) - anomalie, nettoyage annule"
+    } else {
+        Souci "$($doublons.Count) regles au lieu de 78 - c'est ce qui ralentit le demarrage"
+        $bak = Join-Path $env:TEMP ("FirewallRules-backup-{0}.reg" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        & reg.exe export "HKLM\$sub" $bak /y 2>&1 | Out-Null
+        if (Test-Path $bak) {
+            Info "Sauvegarde : $bak"
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $kw = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($sub, $true)
+            $del = 0
+            foreach ($n in $doublons) { try { $kw.DeleteValue($n, $false); $del++ } catch { } }
+            $kw.Close()
+            $sw.Stop()
+            OK "$del regles supprimees en $([int]$sw.Elapsed.TotalMilliseconds) ms"
+            Info "Le pare-feu rechargera le registre propre au prochain demarrage."
+            Info "NovaBlock recreera ses 78 regles tout seul - la protection reste entiere."
+        } else {
+            Souci "Sauvegarde impossible - nettoyage annule par securite"
+        }
+    }
+} catch {
+    Souci "Lecture du registre pare-feu impossible : $($_.Exception.Message)"
+}
+
 # --- 6. Vitesse DNS ---
 Titre "6. Vitesse DNS"
 foreach ($n in @('example.com','www.google.com')) {
