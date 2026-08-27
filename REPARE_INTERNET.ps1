@@ -30,6 +30,29 @@ Write-Host "============================================================"
 Write-Host " NovaBlock - Reparation du demarrage reseau"
 Write-Host "============================================================"
 
+# --- 0. Fichiers d'etat residuels laisses par un update interrompu ---
+Titre "0. Fichiers d'etat residuels"
+# Un update.bat interrompu en cours de route laisse deux fichiers derriere lui :
+#   shutdown.sentinel : NovaBlock le lit au demarrage et S AUTO-TERMINE.
+#                       Tant qu'il traine, l'app ne tourne plus du tout.
+#   update.lock       : bloque toute nouvelle tentative d'update pendant 30 min.
+$nbDir = "$env:ProgramData\NovaBlock"
+foreach ($f in @('shutdown.sentinel','update.lock')) {
+    $fp = Join-Path $nbDir $f
+    if (Test-Path $fp) {
+        $age = [int]((Get-Date) - (Get-Item $fp).LastWriteTime).TotalMinutes
+        Souci "$f present (depuis $age min) - residu d'un update interrompu"
+        try {
+            Remove-Item $fp -Force -ErrorAction Stop
+            OK "  $f supprime"
+        } catch {
+            Souci "  suppression impossible : $($_.Exception.Message)"
+        }
+    } else {
+        OK "$f absent (normal)"
+    }
+}
+
 # --- 1. Etat du dernier demarrage ---
 Titre "1. Dernier demarrage"
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
