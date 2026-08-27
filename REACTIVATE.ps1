@@ -85,8 +85,7 @@ if (-not $exePath) {
         "$env:LOCALAPPDATA\NovaBlock\NovaBlock.exe",
         "$env:PROGRAMFILES\NovaBlock\NovaBlock.exe",
         "${env:PROGRAMFILES(X86)}\NovaBlock\NovaBlock.exe",
-        "D:\code\app\bloqueur distractions\dist\NovaBlock.exe",
-        "D:\code\app\bloqueur distractions\dist-release\NovaBlock.exe")) {
+        "D:\code\app\bloqueur distractions\dist\NovaBlock.exe")) {
         if ($c -and (Test-Path $c)) { $exePath = $c; break }
     }
 }

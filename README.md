@@ -55,7 +55,7 @@ Il télécharge le dernier `NovaBlock.exe` depuis GitHub et remplace l'ancien. P
 
 Ta configuration est conservée : elle est chiffrée dans `C:\ProgramData\NovaBlock\config.dat`.
 
-> **`update_local.bat`** fait la même chose mais **recompile depuis le code source** de ton dossier, au lieu de télécharger. À utiliser seulement si tu as modifié le code toi-même. Il faut Python installé.
+> Si tu as modifié le code toi-même, recompile avec `build.bat` (Python requis), puis relance `dist\NovaBlock.exe`.
 
 ---
 
@@ -63,7 +63,21 @@ Ta configuration est conservée : elle est chiffrée dans `C:\ProgramData\NovaBl
 
 À utiliser si : plus d'internet, les navigateurs tournent en boucle, NovaBlock est coincé, `update.bat` échoue.
 
-**Double-clic sur `EMERGENCY_RESET.bat`** (avec `EMERGENCY_RESET.ps1` dans le même dossier). Environ 10 secondes.
+**Double-clic sur `EMERGENCY_RESET.bat`** (avec `EMERGENCY_RESET.ps1` dans le même dossier).
+
+### Le code de 30 caractères
+
+Une fenêtre s'ouvre et affiche un **code aléatoire de 30 caractères**, régénéré à chaque lancement : minuscules, majuscules, chiffres et symboles.
+
+**Il faut le retaper à la main, caractère par caractère.** Le copier-coller est désactivé : raccourcis clavier, menu contextuel, glisser-déposer, et le code affiché n'est pas sélectionnable.
+
+Le bouton **Lancer EMERGENCY_RESET** reste gris tant que la saisie n'est pas exacte. Une seule erreur suffit à le bloquer, et sa position t'est indiquée. La casse compte.
+
+C'est volontaire. Un reset ne doit jamais partir sur un coup de tête : le temps de recopier 30 caractères, l'envie impulsive est souvent passée. En cas de vrai problème technique, ça ne coûte qu'une minute.
+
+Une fois lancé, le **journal s'affiche en direct** dans la fenêtre, puis le résultat final. Compte une dizaine de secondes d'exécution.
+
+Ce code n'a **rien à voir** avec celui de 25 caractères détenu par Cyril : il est affiché à l'écran et ne demande l'accord de personne. Il ralentit, il n'autorise pas.
 
 Si tu n'as rien sous la main, ouvre un **PowerShell administrateur** (Win+X puis Terminal administrateur) et colle :
 
