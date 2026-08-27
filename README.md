@@ -67,6 +67,23 @@ Ta configuration est conservée : elle est chiffrée dans `C:\ProgramData\NovaBl
 
 **Double-clic sur `EMERGENCY_RESET.bat`** (avec `EMERGENCY_RESET.ps1` dans le même dossier).
 
+### Horaires : ferme de 19h00 à 06h00
+
+**EMERGENCY_RESET refuse de s'ouvrir entre 19h00 et 06h00, heure de Paris.** Un écran de blocage s'affiche à la place, avec le décompte jusqu'à la réouverture.
+
+C'est la nuit que l'envie de tout couper est la plus forte, et c'est justement à ce moment que l'outil était le plus facile à atteindre.
+
+L'heure du PC n'est **jamais** consultée : la changer, ainsi que la date ou le fuseau horaire, ne produit aucun effet. Elle vient du réseau, par deux sources indépendantes qui se recoupent :
+
+1. `timeapi.io`, qui renvoie l'heure de Paris avec le passage à l'heure d'été
+2. l'en-tête `Date` HTTP de serveurs majeurs, en GMT, converti vers Paris
+
+> **Sans réseau, l'accès est refusé.** Couper internet verrouille l'outil au lieu de le libérer. Conséquence à connaître : si tu perds internet pendant la nuit, tu n'auras pas accès à EMERGENCY_RESET avant 06h00.
+
+La vérification tourne aussi **pendant** l'utilisation : si 19h00 arrive alors que la fenêtre est ouverte, elle se ferme. En revanche, un reset déjà lancé va toujours jusqu'au bout.
+
+En dehors de cette plage, l'outil fonctionne normalement — après le code de 30 caractères ci-dessous.
+
 ### Le code de 30 caractères
 
 Une fenêtre s'ouvre et affiche un **code aléatoire de 30 caractères**, régénéré à chaque lancement : minuscules, majuscules, chiffres et symboles.
