@@ -8,6 +8,7 @@ from pathlib import Path
 
 import requests
 
+from . import single_instance
 from .paths import (
     BLOCK_MARKER_END,
     BLOCK_MARKER_START,
@@ -310,6 +311,30 @@ def _build_block(domains: list[str]) -> str:
     return "\n".join(out) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# WARNING — READ BEFORE "FIXING" THE icacls CALLS BELOW
+#
+# The "Administrators" and "Users" grants below are NO-OPS on a non-English
+# Windows: icacls resolves built-in groups by their LOCALISED name, so on a
+# French install it fails with "No mapping between account names and security
+# IDs was done" and leaves hosts readable by SYSTEM only. The locale-proof
+# form is the well-known SID: *S-1-5-32-544 (Administrators),
+# *S-1-5-32-545 (Users), *S-1-5-18 (SYSTEM).
+#
+# This is deliberately NOT fixed. Making hosts readable again hands the
+# Windows DNS client the full ~77k-entry blocklist, and Dnscache degrades to
+# ~43 SECONDS per name resolution (measured 2026-08-27). The machine becomes
+# unusable. Owner decided on 2026-08-27 to leave the hosts layer inert;
+# blocking is carried by Family DNS + the DoH firewall rules + browser
+# policies + the window/title monitor.
+#
+# If you ever want the hosts layer back, you MUST do both together:
+#   1. switch these grants to SIDs, AND
+#   2. cut the blocklist down to a few thousand entries,
+# otherwise you will break name resolution on this machine again.
+# ---------------------------------------------------------------------------
+
+
 def unlock_hosts_acl() -> None:
     """Take ownership and grant Administrators full control on hosts."""
     # takeown is required because previous install may have removed
@@ -407,6 +432,20 @@ def _read_hosts_safe() -> str:
 
 
 def apply_hosts_block(domains: list[str] | None = None) -> int:
+    """Apply the NovaBlock host block, serialised across processes.
+
+    The scheduled-task watchdog and the main app both start at boot within
+    milliseconds of each other. is_running() cannot separate them (the
+    watchdog checks before the main app reaches acquire()), so both used to
+    rewrite hosts at the same time and both failed with PermissionError.
+    That left a pending whitelist migration permanently unapplied and made
+    every boot retry the write, hammering the DNS client. The mutex makes
+    the loser wait instead of collide."""
+    with single_instance.hosts_write_lock():
+        return _apply_hosts_block_locked(domains)
+
+
+def _apply_hosts_block_locked(domains: list[str] | None = None) -> int:
     """Apply the NovaBlock host block to the hosts file. Robust against
     PermissionError (one retry after re-unlocking the ACL) and missing /
     corrupted hosts (restore from backup, then re-apply)."""
@@ -482,7 +521,18 @@ def remove_hosts_block() -> None:
 def hosts_block_present() -> bool:
     """Check if the NovaBlock marker is in the hosts file. Optimised: reads
     only the last 4KB instead of the full ~2.5MB file (the END marker is at
-    the very end, so finding it there proves the block is in place)."""
+    the very end, so finding it there proves the block is in place).
+
+    IMPORTANT — "unreadable" is NOT "absent". lock_hosts_acl() can leave the
+    file readable by SYSTEM only (its Administrators/Users grants are no-ops
+    on a non-English Windows, where those built-in groups have localised
+    names). The elevated main app then gets PermissionError here. Returning
+    False in that case made the watchdog conclude the block had been removed
+    on EVERY tick, firing a full apply_full_block() — a 2MB hosts rewrite
+    plus browser policies plus firewall — every 30 seconds. That starved the
+    Windows DNS client (Dnscache) and made boot-time name resolution take
+    minutes. Only a successful read that lacks the marker proves the block
+    is really gone."""
     if not WINDOWS_HOSTS.exists():
         return False
     try:
@@ -491,6 +541,11 @@ def hosts_block_present() -> bool:
             f.seek(max(0, size - 4096))
             tail = f.read().decode("utf-8", errors="ignore")
         return BLOCK_MARKER_END in tail
+    except (PermissionError, OSError) as e:
+        # Cannot verify. Assume intact: re-applying blindly here is far more
+        # damaging (rewrite storm) than skipping one verification round.
+        log.debug("hosts_block_present: unreadable (%s) — assuming intact", e)
+        return True
     except Exception:
         return False
 
