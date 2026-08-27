@@ -1,0 +1,45 @@
+NovaBlock - Outils de secours
+=============================
+
+IMPORTANT : garde tous ces fichiers DANS LE MEME DOSSIER.
+Chaque .bat appelle le .ps1 du meme nom, place juste a cote de lui.
+Separe-les et ils ne marcheront plus.
+
+Double-clic sur le .bat voulu. Il demande les droits admin tout seul.
+
+
+  EMERGENCY_RESET.bat   Desactive completement NovaBlock quand plus rien
+                        ne marche : plus d'internet, navigateur bloque.
+
+                        Ouvre une fenetre qui affiche un code aleatoire
+                        de 30 caracteres. Il faut le RETAPER A LA MAIN,
+                        caractere par caractere : le copier-coller est
+                        desactive. Le bouton reste inactif tant que la
+                        saisie n'est pas exacte.
+
+                        C'est volontaire : un reset ne doit jamais partir
+                        sur un coup de tete. Le journal du script
+                        s'affiche en direct dans la fenetre.
+
+  REACTIVATE.bat        Remet tout en route apres un EMERGENCY_RESET.
+                        A lancer des que le probleme est regle.
+                        Verifie chaque etape et dit ce qui a echoue.
+
+  REPARE_INTERNET.ps1   Repare un demarrage reseau lent : regles pare-feu
+                        dupliquees, migration hosts coincee, reglages de
+                        carte reseau. Clic droit > Executer avec PowerShell.
+
+  unstick_sockets.bat   Repare les navigateurs qui ne chargent plus rien
+                        alors que la connexion fonctionne.
+
+  whitelist_site.bat    Debloque un site legitime mal classe comme adulte
+                        par le DNS familial.
+
+  update.bat            Met NovaBlock a jour depuis GitHub. Trouve tout
+                        seul l'endroit ou NovaBlock est installe.
+
+  MESURE_BOOT.ps1       Mesure le temps entre le demarrage du PC et
+                        l'acces a internet.
+
+
+Depot : https://github.com/novaiax/novablock-X

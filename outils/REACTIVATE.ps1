@@ -12,7 +12,7 @@
 #
 # Usage:
 #   1) Local : double-click REACTIVATE.bat (auto-elevates)
-#   2) Remote: iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/REACTIVATE.ps1)
+#   2) Remote: iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/outils/REACTIVATE.ps1)
 # ============================================================
 
 $ErrorActionPreference = 'Continue'

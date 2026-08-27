@@ -12,13 +12,15 @@ Tous les fichiers ci-dessous se téléchargent en un clic, sans cloner le dépô
 
 | Je veux… | Fichier | Télécharger |
 |---|---|---|
-| **Installer** | `NovaBlock.exe` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe) |
-| **Mettre à jour** | `update.bat` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat) |
-| **Débloquer en urgence** | `EMERGENCY_RESET` | [.bat](https://github.com/novaiax/novablock-X/releases/latest/download/EMERGENCY_RESET.bat) - [.ps1](https://github.com/novaiax/novablock-X/releases/latest/download/EMERGENCY_RESET.ps1) |
-| **Réactiver après** | `REACTIVATE` | [.bat](https://github.com/novaiax/novablock-X/releases/latest/download/REACTIVATE.bat) - [.ps1](https://github.com/novaiax/novablock-X/releases/latest/download/REACTIVATE.ps1) |
-| **Réparer un navigateur** | `unstick_sockets` | [.bat](https://github.com/novaiax/novablock-X/releases/latest/download/unstick_sockets.bat) - [.ps1](https://github.com/novaiax/novablock-X/releases/latest/download/unstick_sockets.ps1) |
-| **Débloquer un site légitime** | `whitelist_site` | [.bat](https://github.com/novaiax/novablock-X/releases/latest/download/whitelist_site.bat) - [.ps1](https://github.com/novaiax/novablock-X/releases/latest/download/whitelist_site.ps1) |
+| **Installer NovaBlock** | `NovaBlock.exe` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe) |
+| **Tous les outils de secours** | `NovaBlock-Outils.zip` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip) |
+| **Mettre à jour seulement** | `update.bat` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat) |
+| **Réparer un démarrage lent** | `REPARE_INTERNET.ps1` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/REPARE_INTERNET.ps1) |
 | **Mesurer le démarrage** | `MESURE_BOOT.ps1` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/MESURE_BOOT.ps1) |
+
+Le ZIP contient `EMERGENCY_RESET`, `REACTIVATE`, `unstick_sockets`, `whitelist_site`, plus les trois outils ci-dessus.
+
+> **Pourquoi ces quatre-là ne sont pas téléchargeables séparément :** chacun est une paire `.bat` + `.ps1`. Le `.bat` appelle le `.ps1` du même nom **placé juste à côté de lui** ; séparés, ils ne font rien. Les proposer à l'unité revenait à distribuer des fichiers morts, donc ils ne sont plus servis que par le ZIP.
 
 ### Le plus simple : tout d'un coup
 
@@ -82,7 +84,7 @@ Ce code n'a **rien à voir** avec celui de 25 caractères détenu par Cyril : il
 Si tu n'as rien sous la main, ouvre un **PowerShell administrateur** (Win+X puis Terminal administrateur) et colle :
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/EMERGENCY_RESET.ps1)
+iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/outils/EMERGENCY_RESET.ps1)
 ```
 
 Ce que ça fait :
@@ -104,7 +106,7 @@ Ce que ça fait :
 Ou à distance :
 
 ```powershell
-iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/REACTIVATE.ps1)
+iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/outils/REACTIVATE.ps1)
 ```
 
 ---
