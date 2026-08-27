@@ -82,7 +82,7 @@ def install_scheduled_task() -> bool:
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{Path(exe_path()).as_posix().replace('/', '\\\\')}</Command>
+      <Command>{Path(exe_path()).as_posix().replace('/', '\\')}</Command>
       <Arguments>--watchdog</Arguments>
     </Exec>
   </Actions>
@@ -176,7 +176,7 @@ def install_logon_task() -> bool:
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{Path(exe_path()).as_posix().replace('/', '\\\\')}</Command>
+      <Command>{Path(exe_path()).as_posix().replace('/', '\\')}</Command>
     </Exec>
   </Actions>
 </Task>
