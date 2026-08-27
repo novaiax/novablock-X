@@ -1,5 +1,5 @@
 # ============================================================
-# NovaBlock — Master Repair Script
+# NovaBlock - Master Repair Script
 # ============================================================
 # Fixes EVERY known failure mode of NovaBlock + Chrome in one go.
 # Designed to be force-it-fix-it: every step has try/catch, no step
@@ -12,12 +12,12 @@
 #   - Generic "everything is broken" after long uptime
 #
 # What it does (each step is independent):
-#   1.  Stop NovaBlock processes + scheduled tasks (no code needed —
+#   1.  Stop NovaBlock processes + scheduled tasks (no code needed -
 #       this is emergency mode)
 #   2.  Clear stale update.lock and shutdown.sentinel
 #   3.  Mass-delete duplicate NovaBlock_DoH_* firewall rules via COM
 #       (~100x faster than Remove-NetFirewallRule pipeline)
-#   4.  Restart Windows DNS Client (Dnscache) — clears resolver queues
+#   4.  Restart Windows DNS Client (Dnscache) - clears resolver queues
 #   5.  Flush DNS + ARP caches
 #   6.  Reset every active interface DNS to DHCP (box default)
 #   7.  Reset Winsock catalog (clears any tampered LSPs)
@@ -47,13 +47,13 @@ function Try-Block([scriptblock]$Action, [string]$Label) {
         Write-OK $Label
         return $true
     } catch {
-        Write-Warn "$Label — $($_.Exception.Message.Trim())"
+        Write-Warn "$Label - $($_.Exception.Message.Trim())"
         return $false
     }
 }
 
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host "NovaBlock — Master Repair" -ForegroundColor Cyan
+Write-Host "NovaBlock - Master Repair" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 
 # ----------------------------------------------------------------
@@ -98,7 +98,7 @@ try {
         Write-OK "Deleted $deleted/$total rules ($errors errors)"
     }
 } catch {
-    Write-Warn "COM cleanup failed, falling back to slower cmdlet — $($_.Exception.Message.Trim())"
+    Write-Warn "COM cleanup failed, falling back to slower cmdlet - $($_.Exception.Message.Trim())"
     Try-Block {
         Get-NetFirewallRule -DisplayName 'NovaBlock_DoH_*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
     } "Fallback cmdlet cleanup done" | Out-Null
@@ -114,7 +114,7 @@ $null = & net start Dnscache 2>$null
 if ((Get-Service Dnscache -ErrorAction SilentlyContinue).Status -eq 'Running') {
     Write-OK "Dnscache running"
 } else {
-    Write-Warn "Dnscache state unclear (may be in protected mode — OK if cache is flushed below)"
+    Write-Warn "Dnscache state unclear (may be in protected mode - OK if cache is flushed below)"
 }
 
 # ----------------------------------------------------------------
@@ -170,7 +170,7 @@ if (Test-Path $hosts) {
             Write-OK "Hosts file already clean (no legacy YouTube Restricted entries)"
         }
     } catch {
-        Write-Warn "Could not modify hosts — $($_.Exception.Message.Trim())"
+        Write-Warn "Could not modify hosts - $($_.Exception.Message.Trim())"
     }
 } else {
     Write-Skip "Hosts file not found"
@@ -188,7 +188,7 @@ foreach ($vendor in @('Google\Chrome','Microsoft\Edge','BraveSoftware\Brave','Op
     } catch [System.Management.Automation.PSArgumentException] {
         Write-Skip "$vendor (not set)"
     } catch {
-        Write-Skip "$vendor — $($_.Exception.Message.Trim())"
+        Write-Skip "$vendor - $($_.Exception.Message.Trim())"
     }
 }
 
@@ -227,7 +227,7 @@ Write-Step "12/15" "Verifying NovaBlock scheduled tasks"
 foreach ($task in @('NovaBlockWatchdog','NovaBlockApp')) {
     $null = & schtasks /Query /TN $task 2>$null
     if ($LASTEXITCODE -eq 0) { Write-OK "$task present" }
-    else                     { Write-Warn "$task MISSING — relaunch NovaBlock.exe manually to re-create" }
+    else                     { Write-Warn "$task MISSING - relaunch NovaBlock.exe manually to re-create" }
 }
 
 # ----------------------------------------------------------------
@@ -236,7 +236,7 @@ foreach ($task in @('NovaBlockWatchdog','NovaBlockApp')) {
 Write-Step "13/15" "Triggering watchdog to re-add 78 fresh firewall rules"
 $null = & schtasks /Run /TN NovaBlockWatchdog 2>$null
 if ($LASTEXITCODE -eq 0) {
-    Write-OK "Watchdog triggered — rules will repopulate within ~30s"
+    Write-OK "Watchdog triggered - rules will repopulate within ~30s"
 } else {
     Write-Warn "Could not trigger watchdog (will fire on next 1-min tick anyway)"
 }
@@ -250,9 +250,9 @@ $pingName = Test-Connection -ComputerName google.com  -Count 1 -Quiet -ErrorActi
 if ($pingIP -and $pingName) {
     Write-OK "Internet OK (ping IP + DNS resolution both work)"
 } elseif ($pingIP) {
-    Write-Warn "Ping IP works but DNS resolution fails — check Cloudflare Family reachability"
+    Write-Warn "Ping IP works but DNS resolution fails - check Cloudflare Family reachability"
 } else {
-    Write-Warn "No connectivity at all — check physical network / router"
+    Write-Warn "No connectivity at all - check physical network / router"
 }
 
 # ----------------------------------------------------------------
@@ -278,7 +278,7 @@ if (-not $exePath) {
 if ($exePath -and (Test-Path $exePath)) {
     Try-Block { Start-Process -FilePath $exePath -ErrorAction Stop } "NovaBlock launched from $exePath" | Out-Null
 } else {
-    Write-Warn "Could not locate NovaBlock.exe — won't relaunch (scheduled task will fire it at next 1-min tick)"
+    Write-Warn "Could not locate NovaBlock.exe - won't relaunch (scheduled task will fire it at next 1-min tick)"
 }
 
 # ----------------------------------------------------------------

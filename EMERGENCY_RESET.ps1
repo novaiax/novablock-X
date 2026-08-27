@@ -1,5 +1,5 @@
 # ============================================================
-# NovaBlock — EMERGENCY RESET
+# NovaBlock - EMERGENCY RESET
 # ============================================================
 # Last-resort cleanup. Disables EVERYTHING NovaBlock-related plus
 # the Windows Firewall so Chrome and other apps work IMMEDIATELY.
@@ -61,7 +61,7 @@ try {
 # 4. DISABLE Windows Firewall entirely (TEMPORARY)
 Write-Host "[4] Disabling Windows Firewall (TEMPORARY)..." -ForegroundColor Cyan
 netsh advfirewall set allprofiles state off | Out-Null
-Write-Host "    OK — firewall OFF" -ForegroundColor Green
+Write-Host "    OK - firewall OFF" -ForegroundColor Green
 
 # 5. Reset DNS to DHCP everywhere
 Write-Host "[5] Resetting DNS to DHCP on all active interfaces..." -ForegroundColor Cyan
@@ -69,9 +69,9 @@ $adapters = @(Get-NetAdapter | Where-Object { $_.Status -eq 'Up' })
 foreach ($a in $adapters) {
     try {
         Set-DnsClientServerAddress -InterfaceAlias $a.Name -ResetServerAddresses -ErrorAction Stop
-        Write-Host "    OK — $($a.Name)" -ForegroundColor Green
+        Write-Host "    OK - $($a.Name)" -ForegroundColor Green
     } catch {
-        Write-Host "    FAIL — $($a.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+        Write-Host "    FAIL - $($a.Name): $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
 
@@ -101,7 +101,7 @@ try {
         [void]$cleaned.Add($line)
     }
     $cleaned | Set-Content $hosts -Encoding ASCII
-    Write-Host "    OK — NovaBlock block + YouTube Restricted removed from hosts" -ForegroundColor Green
+    Write-Host "    OK - NovaBlock block + YouTube Restricted removed from hosts" -ForegroundColor Green
 } catch {
     Write-Host "    FAIL: $($_.Exception.Message)" -ForegroundColor Yellow
 }
@@ -123,7 +123,7 @@ foreach ($v in $vendors) {
     # Firefox DoH path is nested
     try { Remove-ItemProperty -Path "$v\DNSOverHTTPS" -Name 'Enabled' -ErrorAction Stop } catch {}
     try { Remove-ItemProperty -Path "$v\DNSOverHTTPS" -Name 'Locked'  -ErrorAction Stop } catch {}
-    # Reddit URLBlocklist subkey — wipe NovaBlock's numeric entries
+    # Reddit URLBlocklist subkey - wipe NovaBlock's numeric entries
     $sub = "$v\URLBlocklist"
     try {
         if (Test-Path $sub) {
@@ -134,7 +134,7 @@ foreach ($v in $vendors) {
         }
     } catch {}
 }
-Write-Host "    OK — browser policies cleared (including Reddit URLBlocklist)" -ForegroundColor Green
+Write-Host "    OK - browser policies cleared (including Reddit URLBlocklist)" -ForegroundColor Green
 
 # 9. Kill all browsers so they restart fresh
 Write-Host "[9] Killing browsers (they will need to be reopened)..." -ForegroundColor Cyan
@@ -148,18 +148,18 @@ Write-Host "[10] Verifying connectivity..." -ForegroundColor Cyan
 $pIP   = Test-Connection 8.8.8.8    -Count 1 -Quiet -ErrorAction SilentlyContinue
 $pName = Test-Connection google.com -Count 1 -Quiet -ErrorAction SilentlyContinue
 if ($pIP -and $pName) {
-    Write-Host "    OK — internet alive (IP + DNS)" -ForegroundColor Green
+    Write-Host "    OK - internet alive (IP + DNS)" -ForegroundColor Green
 } elseif ($pIP) {
-    Write-Host "    PARTIAL — IP works, DNS resolution fails" -ForegroundColor Yellow
+    Write-Host "    PARTIAL - IP works, DNS resolution fails" -ForegroundColor Yellow
 } else {
-    Write-Host "    FAIL — no connectivity" -ForegroundColor Red
+    Write-Host "    FAIL - no connectivity" -ForegroundColor Red
 }
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Yellow
-Write-Host "EVERYTHING OFF. Open Chrome — should work now." -ForegroundColor Yellow
+Write-Host "EVERYTHING OFF. Open Chrome - should work now." -ForegroundColor Yellow
 Write-Host "============================================================" -ForegroundColor Yellow
 Write-Host ""
-Write-Host "Reactivate later via: NovaBlock.exe (admin) — it will re-arm everything." -ForegroundColor DarkGray
+Write-Host "Reactivate later via: NovaBlock.exe (admin) - it will re-arm everything." -ForegroundColor DarkGray
 Write-Host ""
 Start-Sleep -Seconds 10

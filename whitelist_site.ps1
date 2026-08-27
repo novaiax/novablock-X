@@ -1,5 +1,5 @@
 # ============================================================
-# NovaBlock — Whitelist a site filtered by Cloudflare Family DNS
+# NovaBlock - Whitelist a site filtered by Cloudflare Family DNS
 # ============================================================
 # Use when a legit site (e.g. movix.golf, a film streaming site,
 # a niche forum) is mis-classified as adult by Cloudflare Family
@@ -11,7 +11,7 @@
 #   2. Resolves the real Cloudflare CDN IP via Google DNS (8.8.8.8)
 #   3. Strips any old broken entries for that domain from hosts
 #   4. Writes clean hosts entries (apex + www) OUTSIDE the NovaBlock
-#      block — the watchdog never touches them
+#      block - the watchdog never touches them
 #   5. Forces Dnscache to re-read hosts: kills the svchost process
 #      hosting Dnscache (Windows auto-restarts it within seconds)
 #   6. Tests ping + DNS resolution and reports
@@ -36,7 +36,7 @@ if (-not $isAdmin) {
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Cyan
-Write-Host " Whitelist site — bypass Cloudflare Family DNS" -ForegroundColor Cyan
+Write-Host " Whitelist site - bypass Cloudflare Family DNS" -ForegroundColor Cyan
 Write-Host "============================================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Ce script debloque un site que Cloudflare Family bloque" -ForegroundColor Yellow
@@ -66,7 +66,7 @@ try {
 }
 
 if (-not $ips -or $ips.Count -eq 0) {
-    Write-Host "    Aucune IP trouvee — le domaine n'existe peut-etre pas." -ForegroundColor Red
+    Write-Host "    Aucune IP trouvee - le domaine n'existe peut-etre pas." -ForegroundColor Red
     Read-Host "Entree pour quitter"
     exit 1
 }
@@ -89,7 +89,7 @@ $existing = [System.IO.File]::ReadAllLines($h) | Where-Object {
     ($_ -notmatch 'NovaBlock bypass')
 }
 
-$bypassHeader = "# === NovaBlock bypass — $domain (Cloudflare Family was filtering) ==="
+$bypassHeader = "# === NovaBlock bypass - $domain (Cloudflare Family was filtering) ==="
 $newLines = @($bypassHeader)
 foreach ($ip in $ips) {
     $newLines += "$ip $domain"
@@ -155,7 +155,7 @@ if ($resolved -and $resolved -ne '0.0.0.0' -and $resolved -ne '::') {
     Write-Host "    Resolution echoue (cache Windows toujours en place)." -ForegroundColor Yellow
     Write-Host ""
     Write-Host "============================================================" -ForegroundColor Yellow
-    Write-Host " REBOOT REQUIS — Windows n'a pas pu relire hosts" -ForegroundColor Yellow
+    Write-Host " REBOOT REQUIS - Windows n'a pas pu relire hosts" -ForegroundColor Yellow
     Write-Host " Apres reboot, $domain sera accessible" -ForegroundColor Yellow
     Write-Host "============================================================" -ForegroundColor Yellow
 }

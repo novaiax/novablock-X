@@ -1,5 +1,5 @@
 # ============================================================
-# NovaBlock — REACTIVATE
+# NovaBlock - REACTIVATE
 # ============================================================
 # Reverses EMERGENCY_RESET: turns the Windows Firewall back on,
 # re-enables NovaBlock scheduled tasks, and launches NovaBlock.exe
@@ -60,17 +60,17 @@ if (-not $exePath) {
 if ($exePath) {
     Write-Host "    Found: $exePath" -ForegroundColor Green
 } else {
-    Write-Host "    NOT FOUND — install NovaBlock first via update.bat or the original installer." -ForegroundColor Red
+    Write-Host "    NOT FOUND - install NovaBlock first via update.bat or the original installer." -ForegroundColor Red
     exit 1
 }
 
-# 4. Launch NovaBlock — it does the rest (apply_full_block + persistence)
+# 4. Launch NovaBlock - it does the rest (apply_full_block + persistence)
 Write-Host "[4] Launching NovaBlock..." -ForegroundColor Cyan
 try {
     Start-Process -FilePath $exePath -ErrorAction Stop
-    Write-Host "    OK — NovaBlock launched" -ForegroundColor Green
+    Write-Host "    OK - NovaBlock launched" -ForegroundColor Green
 } catch {
-    Write-Host "    FAIL — $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "    FAIL - $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 
@@ -85,13 +85,13 @@ while ($waited -lt 30) {
         $ts = [int](Get-Content $heartbeat -ErrorAction SilentlyContinue)
         $age = [int]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) - $ts
         if ($age -lt 60) {
-            Write-Host "    OK — heartbeat fresh ($age s old)" -ForegroundColor Green
+            Write-Host "    OK - heartbeat fresh ($age s old)" -ForegroundColor Green
             break
         }
     }
 }
 if ($waited -ge 30) {
-    Write-Host "    WARN — no fresh heartbeat after 30s. Scheduled task will retry in <1min." -ForegroundColor Yellow
+    Write-Host "    WARN - no fresh heartbeat after 30s. Scheduled task will retry in <1min." -ForegroundColor Yellow
 }
 
 Write-Host ""
