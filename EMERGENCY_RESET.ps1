@@ -47,15 +47,43 @@ schtasks /Change /TN NovaBlockApp /Disable 2>$null | Out-Null
 Write-Host "    OK" -ForegroundColor Green
 
 # 3. Mass-wipe firewall rules via COM
-Write-Host "[3] Wiping NovaBlock firewall rules (fast COM)..." -ForegroundColor Cyan
+# WARNING - do NOT do this:
+#     $fw.Rules | Where-Object { $_.Name -like 'NovaBlock_DoH_*' }
+# Piping the COM collection makes PowerShell wrap EVERY Windows firewall rule
+# (several thousand on a normal install) in a PSObject and run full member
+# discovery on each one. That took minutes to hours here, with no output, and
+# looked like a freeze. NovaBlock's rule names are deterministic, so we rebuild
+# them and call Remove() by name: O(1) per rule, zero enumeration.
+Write-Host "[3] Wiping NovaBlock firewall rules..." -ForegroundColor Cyan
+$dohIps = @(
+    '1.1.1.1','1.0.0.1','1.1.1.2','1.0.0.2','1.1.1.3','1.0.0.3',
+    '162.159.36.5','162.159.46.5','172.64.36.5','172.64.46.5',
+    '8.8.8.8','8.8.4.4','2001:4860:4860::8888','2001:4860:4860::8844',
+    '9.9.9.9','149.112.112.112','9.9.9.10','149.112.112.10',
+    '9.9.9.11','149.112.112.11',
+    '208.67.222.222','208.67.220.220',
+    '45.90.28.0','45.90.30.0',
+    '94.140.14.14','94.140.15.15'
+)
+$protos = @('TCP443','TCP853','UDP443')
 try {
     $fw = New-Object -ComObject HNetCfg.FwPolicy2
-    $toDelete = @($fw.Rules | Where-Object { $_.Name -like 'NovaBlock_DoH_*' })
-    $count = $toDelete.Count
-    foreach ($r in $toDelete) { try { $fw.Rules.Remove($r.Name) } catch {} }
-    Write-Host "    Wiped $count rules" -ForegroundColor Green
+    $total = $dohIps.Count * $protos.Count
+    $removed = 0
+    $i = 0
+    foreach ($ip in $dohIps) {
+        $safe = $ip.Replace(':','_').Replace('.','_')
+        foreach ($pr in $protos) {
+            $i++
+            $name = 'NovaBlock_DoH_' + $pr + '_' + $safe
+            try { $fw.Rules.Remove($name); $removed++ } catch { }
+        }
+        Write-Host ("    ... {0}/{1} verifiees, {2} supprimees" -f $i, $total, $removed) -ForegroundColor DarkGray
+    }
+    Write-Host "    OK - $removed regles supprimees sur $total" -ForegroundColor Green
 } catch {
-    Write-Host "    COM wipe failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "    COM indisponible: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "    L'etape 4 desactive le pare-feu entier, les regles seront sans effet." -ForegroundColor DarkGray
 }
 
 # 4. DISABLE Windows Firewall entirely (TEMPORARY)

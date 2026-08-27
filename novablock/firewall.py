@@ -88,22 +88,41 @@ def _rule_specs():
         yield _make_rule_name("UDP443", ip), NET_FW_IP_PROTOCOL_UDP, "443", ip
 
 
-def _snapshot_existing_names(fw) -> set[str]:
-    """One-pass scan of the rules collection. Returns the set of names that
-    already start with our RULE_PREFIX. O(N) on the rule count, ~10ms for a
-    typical Windows install with a few hundred rules."""
+# A single name can carry thousands of duplicate rule objects, so cap the
+# per-name removal loop rather than trusting it to terminate on its own.
+_MAX_DUPES_PER_NAME = 50_000
+
+
+def _snapshot_existing(fw) -> tuple[set[str], int]:
+    """One-pass scan of the rules collection. Returns (unique names, TOTAL
+    number of rule objects) carrying our RULE_PREFIX.
+
+    The total matters and the set alone is not enough: every duplicate shares
+    the same Name, so a set of names saturates at len(_rule_specs()) however
+    many thousands of rule objects actually exist. Sizing the duplicate check
+    off the set made the cleanup in block_doh_endpoints unreachable, and one
+    machine accumulated ~95000 leftover rules - enough that the Windows
+    Firewall service stalled the whole network stack at boot and left it on
+    "Identifying" for several minutes."""
     names: set[str] = set()
+    total = 0
     try:
         for r in fw.Rules:
             try:
                 n = r.Name
                 if n and n.startswith(RULE_PREFIX):
                     names.add(n)
+                    total += 1
             except Exception:
                 pass
     except Exception as e:
         log.warning("Could not enumerate firewall rules: %s", e)
-    return names
+    return names, total
+
+
+def _snapshot_existing_names(fw) -> set[str]:
+    """Back-compat wrapper: unique names only."""
+    return _snapshot_existing(fw)[0]
 
 
 def block_doh_endpoints() -> int:
@@ -113,7 +132,7 @@ def block_doh_endpoints() -> int:
     if fw is None:
         return 0
 
-    existing = _snapshot_existing_names(fw)
+    existing, total_rules = _snapshot_existing(fw)
 
     # If we previously accumulated duplicates (the old netsh add-without-dedup
     # bug could leave thousands), drop everything matching the prefix first
@@ -121,9 +140,10 @@ def block_doh_endpoints() -> int:
     # pathological case (10k+ rules) but skips the cheap path when count is
     # already normal.
     expected_count = 26 * 3  # 26 IPs × {TCP443, TCP853, UDP443} = 78
-    if len(existing) > expected_count * 2:
-        log.warning("Found %d existing NovaBlock_DoH rules (expected %d) — wiping duplicates",
-                    len(existing), expected_count)
+    if total_rules > expected_count * 2:
+        log.warning("Found %d NovaBlock_DoH rule objects under %d distinct names "
+                    "(expected %d) — wiping duplicates",
+                    total_rules, len(existing), expected_count)
         removed = _wipe_all_doh_rules(fw)
         log.info("Removed %d duplicate rules", removed)
         existing = set()
@@ -163,14 +183,19 @@ def _wipe_all_doh_rules(fw) -> int:
     """Remove every rule whose name starts with RULE_PREFIX. Used to clean up
     accumulated duplicates from old netsh-based versions, and by
     unblock_doh_endpoints below."""
-    names = _snapshot_existing_names(fw)
+    names, _total = _snapshot_existing(fw)
     removed = 0
     for n in names:
-        try:
-            fw.Rules.Remove(n)
-            removed += 1
-        except Exception:
-            pass
+        # Rules.Remove(name) deletes ONE rule per call. A single pass over the
+        # unique names therefore leaves every duplicate in place - which is
+        # how ~95000 rules survived a "wipe" on one machine. Loop until
+        # Remove raises, meaning nothing is left under that name.
+        for _ in range(_MAX_DUPES_PER_NAME):
+            try:
+                fw.Rules.Remove(n)
+                removed += 1
+            except Exception:
+                break
     return removed
 
 
