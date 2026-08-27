@@ -125,6 +125,19 @@ def _snapshot_existing_names(fw) -> set[str]:
     return _snapshot_existing(fw)[0]
 
 
+def _rule_exists(fw, name: str) -> bool:
+    """Authoritative O(1) existence check for a single rule name.
+
+    Rules.Item() is an indexed lookup: it either finds the rule or raises.
+    Unlike a full enumeration it cannot come back partial, which matters
+    because a partial snapshot is what let duplicates run away (see the
+    comment in block_doh_endpoints)."""
+    try:
+        return fw.Rules.Item(name) is not None
+    except Exception:
+        return False
+
+
 def block_doh_endpoints() -> int:
     """Idempotent: add only the rules that don't already exist. Returns the
     number of NEW rules added (existing rules counted in the log)."""
@@ -155,7 +168,14 @@ def block_doh_endpoints() -> int:
         return 0
 
     for name, protocol, port, remote_ip in _rule_specs():
-        if name in existing:
+        # Do NOT decide this from the enumeration snapshot alone. On a large
+        # rule set the scan is slow and can return partial - _snapshot_existing
+        # swallows per-rule errors - and every name it misses gets re-added.
+        # That feedback loop is how 78 rules became 93723 duplicates: more
+        # duplicates make the scan slower and more likely to come back short,
+        # which adds more duplicates. Item() is an indexed lookup that cannot
+        # go partial, so it is the authority here.
+        if name in existing or _rule_exists(fw, name):
             continue
         try:
             rule = win32com.client.Dispatch("HNetCfg.FWRule")
