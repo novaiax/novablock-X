@@ -36,6 +36,181 @@ Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
 # ============================================================
+# FENETRE HORAIRE : blocage strict entre 19h00 et 06h00 (Paris)
+# ============================================================
+# L heure du PC n est jamais utilisee : elle se change en deux clics.
+# On interroge des sources reseau, et on bloque par defaut si aucune ne
+# repond - donc couper internet ne debloque pas, ca verrouille.
+# ============================================================
+
+$HEURE_FERMETURE = 19   # a partir de 19h00, blocage
+$HEURE_OUVERTURE = 6    # jusqu a 06h00, blocage
+
+function Get-HeureParis {
+    # Source 1 : timeapi.io renvoie directement l heure de Paris, avec le
+    # passage heure d ete gere cote serveur.
+    try {
+        $r = Invoke-RestMethod -Uri 'https://timeapi.io/api/Time/current/zone?timeZone=Europe/Paris' `
+                               -TimeoutSec 8 -ErrorAction Stop
+        if ($null -ne $r.hour) {
+            return [pscustomobject]@{
+                Heure  = [datetime]::new($r.year, $r.month, $r.day, $r.hour, $r.minute, $r.seconds)
+                Source = 'timeapi.io'
+            }
+        }
+    } catch { }
+
+    # Source 2 : l en-tete Date HTTP de serveurs majeurs. Il donne l heure
+    # UTC du serveur, qu on convertit en heure de Paris. Impossible a
+    # falsifier depuis le PC.
+    foreach ($url in @('https://api.github.com', 'https://raw.githubusercontent.com', 'https://timeapi.io')) {
+        try {
+            $rep = Invoke-WebRequest -Uri $url -TimeoutSec 7 -UseBasicParsing -ErrorAction Stop
+            $d = $rep.Headers['Date']
+            if ($d) {
+                $utc = [datetime]::Parse($d, [Globalization.CultureInfo]::InvariantCulture,
+                                         [Globalization.DateTimeStyles]::AdjustToUniversal)
+                $tz = [TimeZoneInfo]::FindSystemTimeZoneById('Romance Standard Time')
+                return [pscustomobject]@{
+                    Heure  = [TimeZoneInfo]::ConvertTimeFromUtc($utc, $tz)
+                    Source = "en-tete HTTP ($([Uri]::new($url).Host))"
+                }
+            }
+        } catch { }
+    }
+    return $null
+}
+
+function Test-FenetreBloquee {
+    $t = Get-HeureParis
+    if ($null -eq $t) {
+        # Fail-closed : heure invérifiable, on bloque.
+        return [pscustomobject]@{
+            Bloque = $true; Heure = $null; Source = $null
+            Motif  = "Heure impossible a verifier (aucune source reseau joignable)"
+            Jusqua = $null
+        }
+    }
+    $h = $t.Heure
+    $bloque = ($h.Hour -ge $HEURE_FERMETURE) -or ($h.Hour -lt $HEURE_OUVERTURE)
+    $jusqua = $null
+    if ($bloque) {
+        $jusqua = if ($h.Hour -ge $HEURE_FERMETURE) {
+            $h.Date.AddDays(1).AddHours($HEURE_OUVERTURE)
+        } else {
+            $h.Date.AddHours($HEURE_OUVERTURE)
+        }
+    }
+    [pscustomobject]@{
+        Bloque = $bloque; Heure = $h; Source = $t.Source
+        Motif  = if ($bloque) { "Fenetre de blocage 19h00 - 06h00" } else { $null }
+        Jusqua = $jusqua
+    }
+}
+
+function Show-EcranBlocage($verdict) {
+    $F_FOND  = [System.Drawing.Color]::FromArgb(24, 24, 28)
+    $F_ROUGE = [System.Drawing.Color]::FromArgb(232, 84, 84)
+    $F_TEXTE = [System.Drawing.Color]::FromArgb(232, 232, 238)
+    $F_GRIS  = [System.Drawing.Color]::FromArgb(150, 150, 160)
+
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text            = "NovaBlock - EMERGENCY RESET indisponible"
+    $f.Size            = New-Object System.Drawing.Size(680, 420)
+    $f.StartPosition   = 'CenterScreen'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox     = $false
+    $f.BackColor       = $F_FOND
+
+    $bandeau = New-Object System.Windows.Forms.Panel
+    $bandeau.Location  = New-Object System.Drawing.Point(0, 0)
+    $bandeau.Size      = New-Object System.Drawing.Size(680, 6)
+    $bandeau.BackColor = $F_ROUGE
+    $f.Controls.Add($bandeau)
+
+    function Lb($txt, $x, $y, $w, $h, $taille, $gras, $col, $align) {
+        $l = New-Object System.Windows.Forms.Label
+        $l.Text = $txt
+        $l.Location = New-Object System.Drawing.Point($x, $y)
+        $l.Size = New-Object System.Drawing.Size($w, $h)
+        $st = if ($gras) { [System.Drawing.FontStyle]::Bold } else { [System.Drawing.FontStyle]::Regular }
+        $l.Font = New-Object System.Drawing.Font("Segoe UI", $taille, $st)
+        $l.ForeColor = $col
+        $l.TextAlign = $align
+        $f.Controls.Add($l)
+        $l
+    }
+
+    $null = Lb "ACCES BLOQUE" 30 40 620 40 20 $true $F_ROUGE 'MiddleCenter'
+    $null = Lb $verdict.Motif 30 86 620 24 11 $false $F_TEXTE 'MiddleCenter'
+    $null = Lb "EMERGENCY_RESET est indisponible entre 19h00 et 06h00, heure de Paris." 30 112 620 22 9 $false $F_GRIS 'MiddleCenter'
+
+    $lblDecompte = Lb "" 30 160 620 56 26 $true $F_TEXTE 'MiddleCenter'
+    $lblOuvre    = Lb "" 30 218 620 22 10 $false $F_GRIS 'MiddleCenter'
+    $lblSource   = Lb "" 30 300 620 20 8 $false $F_GRIS 'MiddleCenter'
+    $lblNote     = Lb "L heure vient du reseau, jamais de l horloge du PC. La modifier ne change rien." 30 322 620 20 8 $false $F_GRIS 'MiddleCenter'
+
+    $btn = New-Object System.Windows.Forms.Button
+    $btn.Text = "Fermer"
+    $btn.Location = New-Object System.Drawing.Point(270, 352)
+    $btn.Size = New-Object System.Drawing.Size(140, 32)
+    $btn.FlatStyle = 'Flat'
+    $btn.BackColor = [System.Drawing.Color]::FromArgb(44, 44, 50)
+    $btn.ForeColor = $F_TEXTE
+    $btn.FlatAppearance.BorderSize = 0
+    $btn.Add_Click({ $f.Close() })
+    $f.Controls.Add($btn)
+
+    $script:vHeure  = $verdict.Heure
+    $script:vJusqua = $verdict.Jusqua
+    $script:vSource = $verdict.Source
+    $script:tics    = 0
+
+    $maj = {
+        if ($null -eq $script:vHeure -or $null -eq $script:vJusqua) {
+            $lblDecompte.Text = "--:--:--"
+            $lblOuvre.Text    = "Aucune source reseau joignable - blocage par securite"
+            $lblSource.Text   = "Reconnecte internet pour que l heure puisse etre verifiee"
+            return
+        }
+        $reste = $script:vJusqua - $script:vHeure
+        if ($reste.TotalSeconds -le 0) {
+            $lblDecompte.Text  = "Acces reouvert"
+            $lblDecompte.ForeColor = [System.Drawing.Color]::FromArgb(110, 220, 150)
+            $lblOuvre.Text     = "Relance EMERGENCY_RESET.bat"
+            return
+        }
+        $lblDecompte.Text = "{0:00} h {1:00} min {2:00} s" -f [int]$reste.TotalHours, $reste.Minutes, $reste.Seconds
+        $lblOuvre.Text    = "Ouverture possible a {0} - heure de Paris actuelle : {1}" -f `
+                            $script:vJusqua.ToString('HH:mm'), $script:vHeure.ToString('HH:mm:ss')
+        $lblSource.Text   = "Source de l heure : {0}" -f $script:vSource
+    }
+    & $maj
+
+    $t = New-Object System.Windows.Forms.Timer
+    $t.Interval = 1000
+    $t.Add_Tick({
+        $script:tics++
+        if ($script:vHeure) { $script:vHeure = $script:vHeure.AddSeconds(1) }
+        # Re-verification reseau toutes les 2 minutes : le decompte local
+        # sert seulement d affichage entre deux controles.
+        if ($script:tics % 120 -eq 0) {
+            $v = Test-FenetreBloquee
+            if (-not $v.Bloque) {
+                $script:vHeure = $v.Heure; $script:vJusqua = $v.Heure
+            } else {
+                $script:vHeure = $v.Heure; $script:vJusqua = $v.Jusqua; $script:vSource = $v.Source
+            }
+        }
+        & $maj
+    })
+    $t.Start()
+    [void]$f.ShowDialog()
+    $t.Stop()
+}
+
+
+# ============================================================
 # LOGIQUE DU RESET - INCHANGEE
 # ============================================================
 # Contenu repris octet pour octet du EMERGENCY_RESET.ps1 existant.
@@ -280,6 +455,16 @@ function New-ChallengeCode {
 }
 
 $script:CODE = New-ChallengeCode
+
+# --- PORTAIL HORAIRE ---
+# Verifie avant toute chose. Si la fenetre 19h-06h est active, ou si
+# l heure ne peut pas etre verifiee, on affiche l ecran de blocage et on
+# sort : la fenetre du defi ne se construit meme pas.
+$verdict = Test-FenetreBloquee
+if ($verdict.Bloque) {
+    Show-EcranBlocage $verdict
+    exit 0
+}
 
 # --- Palette ---
 $FOND     = [System.Drawing.Color]::FromArgb(24, 24, 28)
@@ -530,6 +715,20 @@ $btn.Add_Click({
     $script:proc = Start-Process -FilePath 'cmd.exe' -ArgumentList $a -WindowStyle Hidden -PassThru
     $timer.Start()
 })
+
+# Re-verification pendant l utilisation : si 19h00 arrive alors que la
+# fenetre est ouverte, elle se ferme et laisse place a l ecran de blocage.
+$veille = New-Object System.Windows.Forms.Timer
+$veille.Interval = 120000
+$veille.Add_Tick({
+    $v = Test-FenetreBloquee
+    if ($v.Bloque -and -not ($script:proc)) {
+        $veille.Stop()
+        $form.Close()
+        Show-EcranBlocage $v
+    }
+})
+$veille.Start()
 
 $form.Add_Shown({ $saisie.Focus() })
 [void]$form.ShowDialog()
