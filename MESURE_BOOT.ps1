@@ -54,3 +54,41 @@ foreach ($n in @('example.com','www.google.com','github.com')) {
     catch { $sw.Stop(); Write-Host ("  {0,-18} ECHEC" -f $n) -ForegroundColor Red }
 }
 Write-Host ""
+
+# ---- Detail NCSI / NLA : ou passent les minutes ----
+Write-Host ""
+Write-Host "--- Chronologie NCSI / NLA ---"
+$evts = @()
+$evts += Get-WinEvent -FilterHashtable @{
+    LogName='Microsoft-Windows-NCSI/Operational'; StartTime=$boot
+} -ErrorAction SilentlyContinue | ForEach-Object {
+    [PSCustomObject]@{ T=$_.TimeCreated; S='NCSI'; M=(($_.Message -split "`r?`n")[0]) }
+}
+$evts += Get-WinEvent -FilterHashtable @{
+    LogName='Microsoft-Windows-NetworkProfile/Operational'; StartTime=$boot; Id=4001,4002,4003,10000,10001
+} -ErrorAction SilentlyContinue | ForEach-Object {
+    $t = switch ($_.Id) { 10001{'LIEN COUPE'} 4002{'IDENTIFIED'} 10000{'Connected'} default{"id=$($_.Id)"} }
+    [PSCustomObject]@{ T=$_.TimeCreated; S='NLA '; M=$t }
+}
+$evts += Get-WinEvent -FilterHashtable @{
+    LogName='System'; ProviderName='Microsoft-Windows-DNS-Client'; StartTime=$boot
+} -ErrorAction SilentlyContinue | ForEach-Object {
+    [PSCustomObject]@{ T=$_.TimeCreated; S='DNS '; M="id=$($_.Id) $((($_.Message -split "`r?`n")[0]))" }
+}
+$evts += Get-WinEvent -FilterHashtable @{
+    LogName='System'; ProviderName='Service Control Manager'; Id=7011; StartTime=$boot
+} -ErrorAction SilentlyContinue | ForEach-Object {
+    [PSCustomObject]@{ T=$_.TimeCreated; S='SCM ';  M='timeout Dnscache' }
+}
+$evts | Sort-Object T | ForEach-Object {
+    "{0:HH:mm:ss}  [{1}] {2}" -f $_.T, $_.S, ($_.M -replace '\s+',' ')
+} | Select-Object -First 60
+
+# ---- Services lents au demarrage ----
+Write-Host ""
+Write-Host "--- Services les plus lents a demarrer ---"
+Get-WinEvent -FilterHashtable @{LogName='System'; Id=7000,7009,7011,7022,7031,7034; StartTime=$boot} -ErrorAction SilentlyContinue |
+    Sort-Object TimeCreated | Select-Object -First 10 | ForEach-Object {
+        "{0:HH:mm:ss}  id={1}  {2}" -f $_.TimeCreated, $_.Id, (($_.Message -split "`r?`n")[0])
+    }
+Write-Host ""

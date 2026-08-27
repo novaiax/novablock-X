@@ -74,7 +74,7 @@ for /f %%n in ('powershell -NoProfile -Command "[int]([DateTimeOffset]::UtcNow.T
 > "%LOCK_FILE%" echo !ACQUIRE_TS!
 
 REM ----- Step 1: locate the installed NovaBlock.exe -----
-echo [1/6] Locating current NovaBlock installation...
+echo [1/7] Locating current NovaBlock installation...
 set "INSTALL_PATH="
 for /f "tokens=2,*" %%a in ('reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v NovaBlock 2^>nul ^| findstr /R "NovaBlock"') do (
     set "INSTALL_PATH=%%b"
@@ -93,7 +93,7 @@ REM Get the install directory (without filename)
 for %%i in ("%INSTALL_PATH%") do set "INSTALL_DIR=%%~dpi"
 
 REM ----- Step 2: download to a temp file (NovaBlock still running) -----
-echo [2/6] Downloading latest NovaBlock.exe from GitHub...
+echo [2/7] Downloading latest NovaBlock.exe from GitHub...
 set "DOWNLOAD_URL=https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe"
 set "TMP_FILE=%INSTALL_PATH%.tmp"
 
@@ -134,7 +134,7 @@ REM this file every second and exit themselves when it appears (an
 REM internal sys.exit, which is NOT blocked by the kill ACL). We give
 REM them 6 seconds to notice, then fall back to taskkill for older
 REM versions that don't know about the sentinel yet.
-echo [3/6] Stopping NovaBlock to free the exe ^(scheduled tasks kept^)...
+echo [3/7] Stopping NovaBlock to free the exe ^(scheduled tasks kept^)...
 schtasks /End /TN NovaBlockWatchdog >nul 2>&1
 schtasks /End /TN NovaBlockApp >nul 2>&1
 REM Drop sentinel for v1.0.15+ to self-exit
@@ -146,12 +146,17 @@ taskkill /F /IM NovaBlock.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 REM ----- Step 4: ensure hosts ACL is writable -----
-echo [4/6] Unlocking hosts file ACL...
+echo [4/7] Unlocking hosts file ACL...
 takeown /f C:\Windows\System32\drivers\etc\hosts >nul 2>&1
-icacls C:\Windows\System32\drivers\etc\hosts /grant Administrators:F >nul 2>&1
+REM Use the well-known SID, NOT the group name. On a non-English Windows the
+REM built-in group is called Administrateurs / Administratoren / etc, so
+REM "/grant Administrators:F" fails with "No mapping between account names
+REM and security IDs was done" - silently, since errors are sent to nul.
+REM S-1-5-32-544 is the Administrators SID on every locale.
+icacls C:\Windows\System32\drivers\etc\hosts /grant *S-1-5-32-544:F >nul 2>&1
 
 REM ----- Step 5: swap exe -----
-echo [5/6] Installing new version...
+echo [5/7] Installing new version...
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
 move /Y "%TMP_FILE%" "%INSTALL_PATH%" >nul
 if %errorlevel% neq 0 (
@@ -163,7 +168,7 @@ if %errorlevel% neq 0 (
 )
 
 REM ----- Step 6: relaunch + verify -----
-echo [6/6] Re-launching NovaBlock and verifying it comes up...
+echo [6/7] Re-launching NovaBlock and verifying it comes up...
 REM Remove sentinel so the new instance doesn't self-exit on startup.
 REM (Belt-and-braces: start_companion_supervision() also clears it.)
 del "%LOCK_DIR%\shutdown.sentinel" >nul 2>&1
@@ -195,6 +200,46 @@ if !HEART_AGE! gtr 60 (
 
 :cleanup_ok
 del "%LOCK_FILE%" >nul 2>&1
+
+REM ----- Step 7: health check -----
+echo.
+echo [7/7] Verification de l'etat du systeme...
+set /a HEALTH=0
+
+for /f %%d in ('powershell -NoProfile -Command "$sw=[Diagnostics.Stopwatch]::StartNew(); try{[System.Net.Dns]::GetHostAddresses('www.google.com')^|Out-Null; $sw.Stop(); [int]$sw.Elapsed.TotalMilliseconds}catch{$sw.Stop(); -1}"') do set DNSMS=%%d
+if !DNSMS! lss 0 (
+    echo   [PROBLEME] La resolution DNS echoue.
+    set /a HEALTH+=1
+) else (
+    if !DNSMS! gtr 2000 (
+        echo   [PROBLEME] Resolution DNS tres lente : !DNSMS! ms.
+        set /a HEALTH+=1
+    ) else (
+        echo   [OK] Resolution DNS : !DNSMS! ms
+    )
+)
+
+schtasks /Query /TN NovaBlockWatchdog >nul 2>&1
+if !errorlevel! neq 0 (
+    echo   [PROBLEME] Tache planifiee NovaBlockWatchdog absente.
+    set /a HEALTH+=1
+) else (
+    echo   [OK] Tache planifiee presente
+)
+
+tasklist /FI "IMAGENAME eq NovaBlock.exe" 2>nul | find /I "NovaBlock.exe" >nul
+if !errorlevel! neq 0 (
+    echo   [PROBLEME] NovaBlock.exe ne tourne pas.
+    set /a HEALTH+=1
+) else (
+    echo   [OK] NovaBlock tourne
+)
+
+if !HEALTH! gtr 0 (
+    echo.
+    echo   !HEALTH! probleme^(s^) detecte^(s^).
+    echo   Lance unstick_sockets.bat en administrateur.
+)
 echo.
 echo ============================================================
 echo Update complete. NovaBlock re-launched.
