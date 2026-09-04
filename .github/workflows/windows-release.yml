@@ -1,0 +1,66 @@
+name: Windows executable release
+
+on:
+  push:
+    branches: [main, fix/task-manager-recovery]
+    paths: [RELEASE_VERSION]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install build dependencies
+        run: |
+          python -m pip install -r requirements.txt pyinstaller==6.16.0
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify release inputs and absence of embedded credentials
+        run: |
+          if (Test-Path novablock/_keys.py) { throw 'Refusing to publish embedded credentials' }
+          $version = (Get-Content RELEASE_VERSION -Raw).Trim()
+          if ($version -notmatch '^v\d+\.\d+\.\d+$') { throw 'Invalid release version' }
+          "RELEASE_TAG=$version" >> $env:GITHUB_ENV
+      - name: Run recovery regression tests
+        run: |
+          python -m unittest discover -s tests -p 'test_recovery*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m compileall -q novablock
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile Windows executable
+        run: |
+          python -m PyInstaller novablock.spec --clean --noconfirm --distpath dist-release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Package updater and checksum
+        run: |
+          Copy-Item outils/update.bat dist-release/update.bat
+          $hash = (Get-FileHash dist-release/NovaBlock.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  NovaBlock.exe" | Set-Content dist-release/SHA256SUMS.txt -Encoding ascii
+          Compress-Archive -Path outils/* -DestinationPath dist-release/NovaBlock-Outils.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NovaBlock-Windows-${{ env.RELEASE_TAG }}
+          path: dist-release/*
+          if-no-files-found: error
+      - name: Publish complete release (main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:RELEASE_TAG dist-release/NovaBlock.exe dist-release/update.bat dist-release/NovaBlock-Outils.zip dist-release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "NovaBlock $env:RELEASE_TAG - Reprise apres arret du processus" --notes-file RELEASE_NOTES.md --draft
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
