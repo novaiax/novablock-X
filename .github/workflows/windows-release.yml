@@ -44,6 +44,20 @@ jobs:
         run: |
           python -m PyInstaller novablock.spec --clean --noconfirm --distpath dist-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test the packaged executable and independent child
+        run: |
+          $report = Join-Path $env:RUNNER_TEMP 'novablock-smoke.json'
+          $exe = (Resolve-Path dist-release/NovaBlock.exe).Path
+          $arguments = @('--self-test', ('"{0}"' -f $report))
+          $p = Start-Process -FilePath $exe -ArgumentList $arguments -PassThru
+          $handle = $p.Handle
+          if (-not $p.WaitForExit(90000)) { throw 'Packaged smoke test timed out' }
+          $p.Refresh()
+          if (-not (Test-Path $report)) { throw 'Packaged exe did not write its self-test report' }
+          Get-Content $report
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if (-not $result.ok) { throw 'Packaged runtime self-test failed' }
+          Copy-Item $report dist-release/runtime-selftest.json
       - name: Package updater and checksum
         run: |
           Copy-Item outils/update.bat dist-release/update.bat
