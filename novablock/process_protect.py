@@ -1,88 +1,63 @@
-"""Process self-hardening against ordinary kill.
+"""Best-effort resistance to ordinary external process termination.
 
-Applies a deny-ACE to the current process kernel object that revokes
-PROCESS_TERMINATE and PROCESS_SUSPEND_RESUME for *every* security
-principal — including admins. The result:
-
-* Task Manager 'End task' fails with 'Access is denied'.
-* `taskkill /F /PID <pid>` fails the same way.
-* `psutil.Process(pid).kill()` raises AccessDenied.
-
-What still works (intentional):
-
-* The process can terminate **itself** (sys.exit, os._exit, normal
-  Python shutdown). The ACL is checked on TerminateProcess against a
-  *handle*, not on the process exiting on its own.
-* The SYSTEM-context scheduled task can launch a *new* NovaBlock.exe
-  via CreateProcess — it doesn't need to terminate the old one.
-* An admin who knows what they're doing can take ownership of the
-  process and reset the DACL via SeTakeOwnershipPrivilege. That's a
-  multi-step sequence Yann won't trigger by accident.
-
-This is a defence-in-depth layer on top of the scheduled-task and
-mutual-watchdog respawn. It's not a kernel-mode rootkit — it just
-raises the bar from 'one click' to 'deliberate multi-step action'.
+A privileged administrator can override discretionary permissions. Recovery
+must work independently; a user-space process is not unkillable.
+The process can still exit itself during an update or verified uninstall.
 """
 import logging
 
 log = logging.getLogger("novablock.protect")
-
-# From WinNT.h — process-specific access rights we want to deny.
 PROCESS_TERMINATE = 0x0001
 PROCESS_SUSPEND_RESUME = 0x0800
 
 
 def harden_current_process() -> bool:
-    """Deny PROCESS_TERMINATE on the current process for Everyone.
-
-    Returns True if the DACL was successfully tightened. Returns False
-    (and only logs a warning) on any failure — we never abort startup
-    because of this; the scheduled task + mutual watchdog are still in
-    place as fallbacks.
-    """
     try:
         import win32api
         import win32security
     except ImportError:
         log.warning("pywin32 missing — skipping process hardening")
         return False
-
     try:
         handle = win32api.GetCurrentProcess()
         sd = win32security.GetSecurityInfo(
-            handle,
-            win32security.SE_KERNEL_OBJECT,
+            handle, win32security.SE_KERNEL_OBJECT,
             win32security.DACL_SECURITY_INFORMATION,
         )
-        dacl = sd.GetSecurityDescriptorDacl()
-        if dacl is None:
-            dacl = win32security.ACL()
-
-        # 'Everyone' SID — denies the right for absolutely every principal,
-        # including the user who launched the process. The process can still
-        # exit itself; only external Terminate is blocked.
-        # Use the literal SID string S-1-1-0 instead of LookupAccountName:
-        # on French Windows the name is "Tout le monde", on German it's
-        # "Jeder", etc. — looking up by localized name fails. The SID is
-        # the same on every system regardless of language.
+        old_dacl = sd.GetSecurityDescriptorDacl()
+        if old_dacl is None:
+            log.warning("Process has a null DACL; leaving it unchanged and relying on recovery")
+            return False
         everyone = win32security.ConvertStringSidToSid("S-1-1-0")
-        dacl.AddAccessDeniedAce(
-            win32security.ACL_REVISION,
-            PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME,
-            everyone,
+        revision = win32security.ACL_REVISION_DS
+        dacl = win32security.ACL()
+        # Explicit deny first, before any existing grant of terminate rights.
+        dacl.AddAccessDeniedAceEx(
+            revision, 0, PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME, everyone,
         )
-
+        # PyACL has no generic AddAce method. Copy each supported ACE with
+        # its original flags, access mask, SID and optional object GUIDs.
+        # Unknown ACE types abort BEFORE applying changes, never drop them.
+        for index in range(old_dacl.GetAceCount()):
+            ace = old_dacl.GetAce(index)
+            ace_type, flags = ace[0]
+            if ace_type == win32security.ACCESS_ALLOWED_ACE_TYPE:
+                dacl.AddAccessAllowedAceEx(revision, flags, ace[1], ace[2])
+            elif ace_type == win32security.ACCESS_DENIED_ACE_TYPE:
+                dacl.AddAccessDeniedAceEx(revision, flags, ace[1], ace[2])
+            elif ace_type == win32security.ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+                dacl.AddAccessAllowedObjectAce(revision, flags, ace[1], ace[2], ace[3], ace[4])
+            elif ace_type == win32security.ACCESS_DENIED_OBJECT_ACE_TYPE:
+                dacl.AddAccessDeniedObjectAce(revision, flags, ace[1], ace[2], ace[3], ace[4])
+            else:
+                raise ValueError(f"Unsupported process ACE type {ace_type}; original DACL preserved")
         win32security.SetSecurityInfo(
-            handle,
-            win32security.SE_KERNEL_OBJECT,
+            handle, win32security.SE_KERNEL_OBJECT,
             win32security.DACL_SECURITY_INFORMATION,
-            None,  # owner unchanged
-            None,  # group unchanged
-            dacl,  # new DACL
-            None,  # sacl unchanged
+            None, None, dacl, None,
         )
-        log.info("Process hardened: PROCESS_TERMINATE denied to Everyone")
+        log.info("Process DACL updated: terminate/suspend deny before allow ACEs")
         return True
     except Exception as e:
-        log.warning("could not harden process (will rely on watchdog respawn): %s", e)
+        log.warning("could not harden process (will rely on scheduled recovery): %s", e)
         return False

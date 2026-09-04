@@ -1,77 +1,80 @@
-"""Single-instance lock via a named mutex. Prevents two NovaBlock processes
-fighting over hosts file."""
+"""Single-instance and hosts-write mutexes, with pointer-safe Win32 calls."""
 import ctypes
+import logging
 from ctypes import wintypes
 
+log = logging.getLogger("novablock.single_instance")
 MUTEX_NAME = "Global\\NovaBlock_SingleInstance_Mutex"
+HOSTS_MUTEX_NAME = "Global\\NovaBlock_HostsWrite_Mutex"
 ERROR_ALREADY_EXISTS = 183
+ERROR_ACCESS_DENIED = 5
+ERROR_FILE_NOT_FOUND = 2
+SYNCHRONIZE = 0x00100000
+_WAIT_OBJECT_0 = 0x00000000
+_WAIT_ABANDONED = 0x00000080
+_WAIT_TIMEOUT = 0x00000102
 
-_kernel32 = ctypes.windll.kernel32
+# Every function accepting/returning a HANDLE needs an explicit signature.
+# ctypes defaults to c_int, which can truncate handles on 64-bit Windows.
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.CreateMutexW.restype = wintypes.HANDLE
+_kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+_kernel32.OpenMutexW.restype = wintypes.HANDLE
+_kernel32.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+_kernel32.CloseHandle.restype = wintypes.BOOL
+_kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+_kernel32.ReleaseMutex.restype = wintypes.BOOL
+_kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+_kernel32.WaitForSingleObject.restype = wintypes.DWORD
+_kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
 _handle = None
 
 
 def acquire() -> bool:
     global _handle
-    _handle = _kernel32.CreateMutexW(None, wintypes.BOOL(True), MUTEX_NAME)
-    if not _handle:
+    if _handle is not None:
+        return True
+    ctypes.set_last_error(0)
+    handle = _kernel32.CreateMutexW(None, True, MUTEX_NAME)
+    error = ctypes.get_last_error()
+    if not handle:
+        log.warning("Cannot acquire main mutex (WinError %d)", error)
         return False
-    if ctypes.GetLastError() == ERROR_ALREADY_EXISTS:
-        _kernel32.CloseHandle(_handle)
-        _handle = None
+    if error == ERROR_ALREADY_EXISTS:
+        _kernel32.CloseHandle(handle)
         return False
+    _handle = handle
     return True
 
 
 def release() -> None:
     global _handle
-    if _handle:
-        _kernel32.ReleaseMutex(_handle)
-        _kernel32.CloseHandle(_handle)
-        _handle = None
+    handle, _handle = _handle, None
+    if handle is not None:
+        try:
+            _kernel32.ReleaseMutex(handle)
+        finally:
+            _kernel32.CloseHandle(handle)
 
 
 def is_running() -> bool:
-    """Returns True if a main NovaBlock instance is already running (lock held
-    by another process). Used by the headless watchdog to skip ticks that
-    would race with the in-process watchdog over the hosts file."""
-    h = _kernel32.OpenMutexW(0x100000, False, MUTEX_NAME)  # SYNCHRONIZE
-    if h:
-        _kernel32.CloseHandle(h)
+    ctypes.set_last_error(0)
+    handle = _kernel32.OpenMutexW(SYNCHRONIZE, False, MUTEX_NAME)
+    error = ctypes.get_last_error()
+    if handle:
+        _kernel32.CloseHandle(handle)
         return True
+    # AccessDenied means the object may belong to another security context;
+    # it is not evidence of absence. Avoid spawning duplicates in that case.
+    if error == ERROR_ACCESS_DENIED:
+        return True
+    if error not in (0, ERROR_FILE_NOT_FOUND):
+        log.warning("Cannot inspect main mutex (WinError %d)", error)
     return False
 
 
-# ---------------------------------------------------------------------------
-# Cross-process hosts-write lock
-#
-# is_running() alone cannot serialise hosts writes at boot: the scheduled-task
-# watchdog and the main app start within milliseconds of each other, and the
-# watchdog checks is_running() BEFORE the main app has reached acquire().
-# Both then conclude they are alone and rewrite hosts simultaneously, which
-# produced "hosts write PermissionError" on every boot and left a pending
-# migration permanently unapplied. This mutex is held for the duration of the
-# actual write, so the loser waits instead of colliding.
-# ---------------------------------------------------------------------------
-
-HOSTS_MUTEX_NAME = "Global\\NovaBlock_HostsWrite_Mutex"
-
-_WAIT_OBJECT_0 = 0x00000000
-_WAIT_ABANDONED = 0x00000080
-_WAIT_TIMEOUT = 0x00000102
-
-_kernel32.CreateMutexW.restype = wintypes.HANDLE
-_kernel32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-_kernel32.WaitForSingleObject.restype = wintypes.DWORD
-_kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-
-
 class HostsWriteLock:
-    """Context manager serialising hosts writes across NovaBlock processes.
-
-    Never raises: if the mutex cannot be created or the wait times out we
-    proceed anyway. Blocking a block re-apply because of lock trouble would
-    be worse than a rare collision, which the caller already retries."""
-
+    """Best-effort serialization of hosts writes, preserving previous policy."""
     def __init__(self, timeout_ms: int = 30000) -> None:
         self.timeout_ms = timeout_ms
         self._handle = None
@@ -79,13 +82,10 @@ class HostsWriteLock:
 
     def __enter__(self) -> "HostsWriteLock":
         try:
-            self._handle = _kernel32.CreateMutexW(None, wintypes.BOOL(False), HOSTS_MUTEX_NAME)
+            self._handle = _kernel32.CreateMutexW(None, False, HOSTS_MUTEX_NAME)
             if not self._handle:
                 return self
-            rc = _kernel32.WaitForSingleObject(self._handle, wintypes.DWORD(self.timeout_ms))
-            # WAIT_ABANDONED means the previous holder died mid-write; the
-            # mutex is ours now and the caller rewrites the file wholesale
-            # anyway, so treat it as acquired.
+            rc = _kernel32.WaitForSingleObject(self._handle, self.timeout_ms)
             self.acquired = rc in (_WAIT_OBJECT_0, _WAIT_ABANDONED)
         except Exception:
             self.acquired = False

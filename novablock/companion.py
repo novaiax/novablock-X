@@ -1,21 +1,9 @@
-"""Mutual watchdog: a second process that resurrects the main app.
+"""Mutual recovery for the main app and its companion.
 
-Two processes:
-  * main app (NovaBlock.exe, no args) — does the actual blocking.
-  * companion (NovaBlock.exe --companion) — does nothing but watch.
-
-Each writes its PID to a file in C:\\ProgramData\\NovaBlock and polls
-the other's PID file every second. If the watched PID is gone, the
-watcher spawns a fresh instance of it.
-
-To actually stop NovaBlock you'd need to terminate BOTH processes
-within the same ~1s poll window, AND the SYSTEM scheduled task would
-have to miss its next 1-minute tick. Task Manager kills one process
-at a time, so the survivor always relaunches its dead partner before
-the user can click the second 'End task'.
-
-The companion process is intentionally minimal — no Tk, no GUI, no
-network. Just a poll loop. Smaller surface area = less to crash.
+The companion is a separate instance, including separate PyInstaller onefile
+resources. The SYSTEM task is the fallback when both processes are stopped.
+A privileged administrator can still terminate processes; this is recovery,
+not an assertion that a user-space executable is unkillable.
 """
 import logging
 import os
@@ -25,23 +13,15 @@ import threading
 import time
 from pathlib import Path
 
-from . import process_protect
-from .paths import (
-    COMPANION_PID_FILE,
-    MAIN_PID_FILE,
-    SHUTDOWN_SENTINEL,
-    ensure_dirs,
-    exe_path,
-)
+from . import process_protect, recovery
+from .paths import COMPANION_PID_FILE, MAIN_PID_FILE, ensure_dirs, exe_path
 
 log = logging.getLogger("novablock.companion")
-
-POLL_INTERVAL = 1.0          # seconds between alive-checks
-RELAUNCH_GRACE = 5.0         # wait after relaunch before next check
+POLL_INTERVAL = 1.0
+RELAUNCH_GRACE = 5.0
 COMPANION_FLAG = "--companion"
+_pending_companion_pid = 0
 
-
-# ---------- helpers ----------
 
 def _read_pid(p: Path) -> int:
     try:
@@ -50,26 +30,45 @@ def _read_pid(p: Path) -> int:
         return 0
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive(pid: int, role: str = "") -> bool:
+    """Reject recycled PIDs belonging to a different program or mode.
+
+    AccessDenied is inconclusive: conservatively avoid a duplicate spawn.
+    The SYSTEM watchdog separately checks the global main-instance mutex.
+    """
     if pid <= 0:
         return False
     try:
         import psutil
+        proc = psutil.Process(pid)
+        if not proc.is_running():
+            return False
+        actual_exe = os.path.normcase(os.path.abspath(proc.exe()))
+        expected_exe = os.path.normcase(os.path.abspath(sys.executable))
+        if actual_exe != expected_exe:
+            return False
+        argv = proc.cmdline()
+        if not getattr(sys, "frozen", False):
+            entry = str(Path(__file__).resolve().parent.parent / "__main__.py")
+            if not any(os.path.normcase(os.path.abspath(a)) == os.path.normcase(entry)
+                       for a in argv[1:] if not a.startswith("-")):
+                return False
+        if role == "companion":
+            return COMPANION_FLAG in argv
+        if role == "main":
+            return not any(flag in argv for flag in
+                           (COMPANION_FLAG, "--watchdog", "--uninstall", "--check", "--reapply", "--self-test"))
+        return True
+    except ImportError:
+        log.error("psutil missing: cannot inspect companion process")
+        return False
+    except psutil.AccessDenied:
         return psutil.pid_exists(pid)
-    except Exception:
-        # Fallback via OpenProcess
-        try:
-            import ctypes
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            h = ctypes.windll.kernel32.OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-            )
-            if h:
-                ctypes.windll.kernel32.CloseHandle(h)
-                return True
-            return False
-        except Exception:
-            return False
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except Exception as e:
+        log.debug("Cannot inspect pid %s: %s", pid, e)
+        return False
 
 
 def _write_pid_file(path: Path, pid: int) -> None:
@@ -80,19 +79,31 @@ def _write_pid_file(path: Path, pid: int) -> None:
         log.warning("could not write %s: %s", path, e)
 
 
+def _command(*args: str) -> list[str]:
+    if getattr(sys, "frozen", False):
+        return [str(exe_path()), *args]
+    entry = Path(__file__).resolve().parent.parent / "__main__.py"
+    return [sys.executable, str(entry), *args]
+
+
 def _spawn(args: list[str]) -> int:
-    """Spawn a detached child. Returns its PID, 0 on failure."""
+    """Spawn a detached, INDEPENDENT instance, not a PyInstaller worker.
+
+    PyInstaller >=6.9 otherwise reuses the parent's extracted temporary files;
+    those may disappear when the parent dies. A recovery child must outlive it.
+    """
     try:
         flags = 0
-        if hasattr(subprocess, "DETACHED_PROCESS"):
-            flags |= subprocess.DETACHED_PROCESS
-        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
-            flags |= subprocess.CREATE_NEW_PROCESS_GROUP
-        if hasattr(subprocess, "CREATE_NO_WINDOW"):
-            flags |= subprocess.CREATE_NO_WINDOW
+        for flag in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):
+            flags |= getattr(subprocess, flag, 0)
+        env = os.environ.copy()
+        env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
         proc = subprocess.Popen(
             args,
             creationflags=flags,
+            env=env,
+            cwd=str(Path(sys.executable).parent) if getattr(sys, "frozen", False)
+                else str(Path(__file__).resolve().parent.parent),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -104,41 +115,32 @@ def _spawn(args: list[str]) -> int:
         return 0
 
 
-# ---------- main-side hooks ----------
-
 def write_main_pid() -> None:
-    """Called once by main app at startup."""
     _write_pid_file(MAIN_PID_FILE, os.getpid())
 
 
 def spawn_companion() -> int:
-    """Launch the companion process. Idempotent: if a companion PID is
-    already alive, returns it without spawning a second one."""
-    existing = _read_pid(COMPANION_PID_FILE)
-    if _pid_alive(existing):
-        log.info("Companion already alive (pid=%d)", existing)
-        return existing
-    args = [str(exe_path()), COMPANION_FLAG]
-    pid = _spawn(args)
-    if pid:
-        log.info("Companion spawned, pid=%d", pid)
-    return pid
+    global _pending_companion_pid
+    if recovery.recovery_paused():
+        return 0
+    # Onefile extraction can take longer than RELAUNCH_GRACE. Track the
+    # bootloader PID until the actual Python child has written its own PID.
+    for pid in (_read_pid(COMPANION_PID_FILE), _pending_companion_pid):
+        if _pid_alive(pid, "companion"):
+            return pid
+    _pending_companion_pid = _spawn(_command(COMPANION_FLAG))
+    if _pending_companion_pid:
+        log.info("Companion spawned, launcher pid=%d", _pending_companion_pid)
+    return _pending_companion_pid
 
 
 def watch_companion(stop_event: threading.Event) -> None:
-    """Background thread (in the main app). Restarts the companion if it
-    dies. Exits cleanly when stop_event is set OR when the shutdown
-    sentinel is present (legitimate uninstall)."""
     while not stop_event.is_set():
-        if SHUTDOWN_SENTINEL.exists():
-            log.info("Shutdown sentinel present — main no longer guards companion")
+        if recovery.shutdown_requested():
             return
         try:
-            cpid = _read_pid(COMPANION_PID_FILE)
-            if not _pid_alive(cpid):
-                log.warning("Companion process is gone — respawning")
+            if not recovery.recovery_paused() and not _pid_alive(_read_pid(COMPANION_PID_FILE), "companion"):
                 spawn_companion()
-                # Let the new companion settle before next check.
                 if stop_event.wait(RELAUNCH_GRACE):
                     return
                 continue
@@ -149,55 +151,38 @@ def watch_companion(stop_event: threading.Event) -> None:
 
 
 def start_companion_supervision() -> threading.Event:
-    """One-shot helper: harden self, write own PID, spawn companion, and
-    start the watcher thread. Returns the stop_event so the caller can
-    cancel supervision at shutdown."""
-    # Clear any stale shutdown sentinel from a previous (uninstall) session.
-    # If we're starting normally, supervision must be active.
-    try:
-        SHUTDOWN_SENTINEL.unlink(missing_ok=True)
-    except Exception:
-        pass
-    process_protect.harden_current_process()
+    # Do not erase an updater/uninstaller's active shutdown request.
+    stop_event = threading.Event()
+    if recovery.shutdown_requested():
+        stop_event.set()
+        return stop_event
+    if not process_protect.harden_current_process():
+        log.warning("Process hardening unavailable; scheduled recovery remains required")
     write_main_pid()
     spawn_companion()
-    stop_event = threading.Event()
-    t = threading.Thread(
-        target=watch_companion,
-        args=(stop_event,),
-        name="NovaBlockCompanionWatcher",
-        daemon=True,
-    )
-    t.start()
+    threading.Thread(target=watch_companion, args=(stop_event,),
+                     name="NovaBlockCompanionWatcher", daemon=True).start()
     return stop_event
 
 
-# ---------- companion-side entry point ----------
-
 def run_companion_loop() -> int:
-    """Entry point when launched with --companion. Hardens itself, then
-    polls the main PID file forever, relaunching the main app whenever
-    it dies. Exits cleanly when the shutdown sentinel appears (this is
-    how the verified-code uninstall path breaks the mutual-resurrection
-    loop — the companion can't be killed from outside, but it can be
-    asked to exit by an authenticated caller)."""
+    if recovery.shutdown_requested():
+        return 0
     process_protect.harden_current_process()
     _write_pid_file(COMPANION_PID_FILE, os.getpid())
     log.info("Companion loop running (pid=%d)", os.getpid())
-
+    pending_main_pid = 0
     while True:
-        if SHUTDOWN_SENTINEL.exists():
-            log.info("Shutdown sentinel present — companion exits voluntarily")
-            try:
+        if recovery.shutdown_requested():
+            if _read_pid(COMPANION_PID_FILE) == os.getpid():
                 COMPANION_PID_FILE.unlink(missing_ok=True)
-            except Exception:
-                pass
             return 0
         try:
-            main_pid = _read_pid(MAIN_PID_FILE)
-            if not _pid_alive(main_pid):
-                log.warning("Main app is gone — respawning")
-                _spawn([str(exe_path())])
+            if _pid_alive(_read_pid(MAIN_PID_FILE), "main"):
+                pending_main_pid = 0
+            elif not recovery.recovery_paused() and not _pid_alive(pending_main_pid, "main"):
+                log.warning("Main app is gone — respawning independent instance")
+                pending_main_pid = _spawn(_command())
                 time.sleep(RELAUNCH_GRACE)
                 continue
         except Exception as e:
