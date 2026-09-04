@@ -1,7 +1,7 @@
 """Best-effort resistance to ordinary external process termination.
 
 A privileged administrator can override discretionary permissions. Recovery
-must work independently of this layer; never treat the process as unkillable.
+must work independently; a user-space process is not unkillable.
 The process can still exit itself during an update or verified uninstall.
 """
 import logging
@@ -26,28 +26,37 @@ def harden_current_process() -> bool:
         )
         old_dacl = sd.GetSecurityDescriptorDacl()
         if old_dacl is None:
-            # A null DACL grants everything. Do not accidentally turn it into
-            # a deny-only DACL (which would also block all inspection rights).
-            log.warning("Process has a null DACL; keeping it unchanged and relying on recovery")
+            log.warning("Process has a null DACL; leaving it unchanged and relying on recovery")
             return False
         everyone = win32security.ConvertStringSidToSid("S-1-1-0")
+        revision = win32security.ACL_REVISION_DS
         dacl = win32security.ACL()
-        # Windows processes ACEs in order. Appending a deny after an existing
-        # allow, as the previous implementation did, can leave terminate
-        # permission already granted. Put the explicit deny FIRST.
-        dacl.AddAccessDeniedAce(
-            win32security.ACL_REVISION,
-            PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME,
-            everyone,
+        # Explicit deny first, before any existing grant of terminate rights.
+        dacl.AddAccessDeniedAceEx(
+            revision, 0, PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME, everyone,
         )
+        # PyACL has no generic AddAce method. Copy each supported ACE with
+        # its original flags, access mask, SID and optional object GUIDs.
+        # Unknown ACE types abort BEFORE applying changes, never drop them.
         for index in range(old_dacl.GetAceCount()):
-            dacl.AddAce(win32security.ACL_REVISION, dacl.GetAceCount(), old_dacl.GetAce(index))
+            ace = old_dacl.GetAce(index)
+            ace_type, flags = ace[0]
+            if ace_type == win32security.ACCESS_ALLOWED_ACE_TYPE:
+                dacl.AddAccessAllowedAceEx(revision, flags, ace[1], ace[2])
+            elif ace_type == win32security.ACCESS_DENIED_ACE_TYPE:
+                dacl.AddAccessDeniedAceEx(revision, flags, ace[1], ace[2])
+            elif ace_type == win32security.ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+                dacl.AddAccessAllowedObjectAce(revision, flags, ace[1], ace[2], ace[3], ace[4])
+            elif ace_type == win32security.ACCESS_DENIED_OBJECT_ACE_TYPE:
+                dacl.AddAccessDeniedObjectAce(revision, flags, ace[1], ace[2], ace[3], ace[4])
+            else:
+                raise ValueError(f"Unsupported process ACE type {ace_type}; original DACL preserved")
         win32security.SetSecurityInfo(
             handle, win32security.SE_KERNEL_OBJECT,
             win32security.DACL_SECURITY_INFORMATION,
             None, None, dacl, None,
         )
-        log.info("Process DACL updated: explicit terminate/suspend deny placed before allow ACEs")
+        log.info("Process DACL updated: terminate/suspend deny before allow ACEs")
         return True
     except Exception as e:
         log.warning("could not harden process (will rely on scheduled recovery): %s", e)
