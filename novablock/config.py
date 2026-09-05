@@ -29,8 +29,7 @@ DEFAULTS: dict[str, Any] = {
     "from_email": "novablock@resend.dev",
     "code_rotation_ts": 0,
     "code_rotation_days": 7,
-    # Legacy network-block keys. They are intentionally kept for backward
-    # compatibility but are emptied by migrate_custom_sites_to_popup_only().
+    # Legacy network-block keys retained only for migration from <=1.0.31.
     "custom_blocked_domains": [],
     "custom_blocked_urls": [],
     # v1.0.32+: user-added sites live here and are popup-only.
@@ -42,7 +41,7 @@ DEFAULTS: dict[str, Any] = {
 
 
 def _normalize_domain(d: str) -> str:
-    d = d.strip().lower()
+    d = (d or "").strip().lower()
     for prefix in ("https://", "http://"):
         if d.startswith(prefix):
             d = d[len(prefix):]
@@ -87,46 +86,37 @@ def _dedupe(values: list[str]) -> list[str]:
     return out
 
 
-def migrate_custom_sites_to_popup_only() -> bool:
-    """Move legacy custom blocks to the popup-only storage exactly once.
+def _combined_popup_domains(cfg: dict[str, Any]) -> list[str]:
+    # Include legacy values until migration has persisted them, so an update
+    # can never make the user's custom popup list appear to vanish.
+    values = list(cfg.get("custom_popup_domains", []) or [])
+    values += list(cfg.get("custom_blocked_domains", []) or [])
+    domains = [_normalize_domain(str(v)) for v in values]
+    return _dedupe([
+        d for d in domains if d and not _is_custom_allowed_host(d)
+    ])
 
-    The legacy keys are cleared so blocker.py/browser_policies.py see no custom
-    network blocks anymore. movix.cash is discarded during migration.
-    Returns True when network/policy cleanup should be run once by main.py.
+
+def _combined_popup_urls(cfg: dict[str, Any]) -> list[str]:
+    values = list(cfg.get("custom_popup_urls", []) or [])
+    values += list(cfg.get("custom_blocked_urls", []) or [])
+    urls = [_normalize_url(str(v)) for v in values]
+    return _dedupe([
+        u for u in urls if u and not _is_custom_allowed_host(_url_host(u))
+    ])
+
+
+def migrate_custom_sites_to_popup_only() -> bool:
+    """Move <=1.0.31 custom blocks to popup-only storage exactly once.
+
+    The old keys are emptied so stale data cannot be reused by old network
+    layers. movix.cash is discarded during migration.
     """
     cfg = load()
     if cfg.get("custom_popup_only_migrated"):
         return False
-
-    popup_domains = [
-        _normalize_domain(str(v))
-        for v in (cfg.get("custom_popup_domains", []) or [])
-    ]
-    popup_domains += [
-        _normalize_domain(str(v))
-        for v in (cfg.get("custom_blocked_domains", []) or [])
-    ]
-    popup_domains = [
-        d for d in popup_domains
-        if d and not _is_custom_allowed_host(d)
-    ]
-
-    popup_urls = [
-        _normalize_url(str(v))
-        for v in (cfg.get("custom_popup_urls", []) or [])
-    ]
-    popup_urls += [
-        _normalize_url(str(v))
-        for v in (cfg.get("custom_blocked_urls", []) or [])
-    ]
-    popup_urls = [
-        u for u in popup_urls
-        if u and not _is_custom_allowed_host(_url_host(u))
-    ]
-
-    cfg["custom_popup_domains"] = _dedupe(popup_domains)
-    cfg["custom_popup_urls"] = _dedupe(popup_urls)
-    # Critical: legacy network layers now receive empty lists.
+    cfg["custom_popup_domains"] = _combined_popup_domains(cfg)
+    cfg["custom_popup_urls"] = _combined_popup_urls(cfg)
     cfg["custom_blocked_domains"] = []
     cfg["custom_blocked_urls"] = []
     cfg["custom_popup_only_migrated"] = True
@@ -140,11 +130,11 @@ def add_custom_domain(domain: str) -> str:
     if not d or "." not in d or " " in d or _is_custom_allowed_host(d):
         return ""
     cfg = load()
-    customs = cfg.setdefault("custom_popup_domains", [])
-    if d in customs:
-        return d
-    customs.append(d)
+    customs = _combined_popup_domains(cfg)
+    if d not in customs:
+        customs.append(d)
     cfg["custom_popup_domains"] = _dedupe(customs)
+    cfg["custom_blocked_domains"] = []
     save(cfg)
     return d
 
@@ -152,21 +142,18 @@ def add_custom_domain(domain: str) -> str:
 def remove_custom_domain(domain: str) -> bool:
     d = _normalize_domain(domain)
     cfg = load()
-    customs = list(cfg.get("custom_popup_domains", []) or [])
-    if d in customs:
-        customs.remove(d)
-        cfg["custom_popup_domains"] = customs
-        save(cfg)
-        return True
-    return False
+    customs = _combined_popup_domains(cfg)
+    if d not in customs:
+        return False
+    customs.remove(d)
+    cfg["custom_popup_domains"] = customs
+    cfg["custom_blocked_domains"] = []
+    save(cfg)
+    return True
 
 
 def get_popup_domains() -> list[str]:
-    return [
-        _normalize_domain(str(d))
-        for d in (load().get("custom_popup_domains", []) or [])
-        if _normalize_domain(str(d)) and not _is_custom_allowed_host(_normalize_domain(str(d)))
-    ]
+    return _combined_popup_domains(load())
 
 
 def add_custom_url(url: str) -> str:
@@ -175,43 +162,41 @@ def add_custom_url(url: str) -> str:
     if not u or " " in u or "." not in u or _is_custom_allowed_host(_url_host(u)):
         return ""
     cfg = load()
-    customs = cfg.setdefault("custom_popup_urls", [])
-    if u in customs:
-        return u
-    customs.append(u)
+    customs = _combined_popup_urls(cfg)
+    if u not in customs:
+        customs.append(u)
     cfg["custom_popup_urls"] = _dedupe(customs)
+    cfg["custom_blocked_urls"] = []
     save(cfg)
     return u
 
 
 def remove_custom_url(url: str) -> bool:
+    u = _normalize_url(url)
     cfg = load()
-    customs = list(cfg.get("custom_popup_urls", []) or [])
-    if url in customs:
-        customs.remove(url)
-        cfg["custom_popup_urls"] = customs
-        save(cfg)
-        return True
-    return False
+    customs = _combined_popup_urls(cfg)
+    if u not in customs:
+        return False
+    customs.remove(u)
+    cfg["custom_popup_urls"] = customs
+    cfg["custom_blocked_urls"] = []
+    save(cfg)
+    return True
 
 
 def get_popup_urls() -> list[str]:
-    return [
-        _normalize_url(str(u))
-        for u in (load().get("custom_popup_urls", []) or [])
-        if _normalize_url(str(u)) and not _is_custom_allowed_host(_url_host(str(u)))
-    ]
+    return _combined_popup_urls(load())
 
 
-# Compatibility API used by the old network-blocking layers. Returning the
-# legacy keys (which migration empties) guarantees popup-only sites are never
-# injected into hosts or Chromium URLBlocklist.
+# Compatibility API consumed by blocker.py/browser_policies.py. Custom sites
+# are popup-only from v1.0.32 onward, so the network layers always receive an
+# empty list even before the one-time config migration has run.
 def get_custom_domains() -> list[str]:
-    return list(load().get("custom_blocked_domains", []) or [])
+    return []
 
 
 def get_custom_urls() -> list[str]:
-    return list(load().get("custom_blocked_urls", []) or [])
+    return []
 
 
 def needs_code_rotation() -> bool:
