@@ -108,13 +108,13 @@ def ensure_persistence() -> None:
 
 def run_app() -> None:
     """Main app loop: tray + watchdog + monitor + hidden status window."""
-    from .gui import StatusWindow, BlockedPopup
+    from .custom_status import StatusWindow
+    from .gui import BlockedPopup
     from .watchdog import Watchdog
     from .monitor import WindowMonitor
     from .tray import Tray
 
     log = logging.getLogger("novablock.main")
-    # Start supervision before potentially slow task/network maintenance.
     companion_stop = companion.start_companion_supervision()
     ensure_persistence()
 
@@ -181,13 +181,7 @@ def run_app() -> None:
 
 
 def run_watchdog_headless() -> None:
-    """Repair blocking, then recover the app IN THE USER'S SESSION.
-
-    SYSTEM cannot display a tray or popup in the desktop session. Recovery
-    therefore runs the existing InteractiveToken task, not a SYSTEM child.
-    It still happens if filters are intact, or a temporary unlock is active.
-    No email is sent by this recovery path.
-    """
+    """Repair blocking, then recover the app IN THE USER'S SESSION."""
     log = logging.getLogger("novablock.headless")
     if not config.is_installed():
         log.info("Not installed — headless watchdog exits")
@@ -215,9 +209,6 @@ def run_watchdog_headless() -> None:
         if not blocker.hosts_block_present() or not blocker.dns_is_locked():
             log.warning("Block missing and main app not ticking — re-applying from headless")
             blocker.apply_full_block(kill_browsers=False)
-        # Keep existing persistence self-heal. Do not resolve SYSTEM as the
-        # interactive user if the app task is missing; log and let a normal
-        # launch recreate that task under the real user's account.
         try:
             persistence.add_startup_registry()
             if not persistence.startup_shortcut_present():
@@ -227,8 +218,6 @@ def run_watchdog_headless() -> None:
         except Exception as e:
             log.warning("persistence self-heal failed: %s", e)
     finally:
-        # Also executed when a filter operation fails or unlock is active.
-        # Recheck state in the helper in case the companion already won.
         if not main_alive:
             recovery.request_app_restart()
 
@@ -282,7 +271,6 @@ def run_diagnostic() -> int:
 def run_uninstall_check() -> int:
     from .gui import CodeDialog
     import tkinter as tk
-    from tkinter import messagebox
 
     if not config.is_installed():
         return 0
@@ -378,8 +366,6 @@ def main() -> int:
                 "NovaBlock", 0x40,
             )
         return 0
-    # An automatic restart already queued by Task Scheduler must not fight
-    # an update or verified uninstall that began just after the request.
     if recovery.shutdown_requested():
         log.info("Maintenance shutdown requested — normal launch deferred")
         return 0
