@@ -1,27 +1,26 @@
-## NovaBlock v1.0.30 : détection URL réelle + liste visible des sites perso
+## NovaBlock v1.0.31 : updater robuste quand l'ancien exe reste verrouillé
+
+### Correctif principal
+
+Le précédent `update.bat` pouvait tenter de remplacer `NovaBlock.exe` alors qu'un ancien processus NovaBlock ou son image Windows détenait encore le fichier. Résultat : `Access is denied` à l'étape 5.
+
+La v1.0.31 corrige ce chemin :
+
+- Après création du `shutdown.sentinel`, l'updater vérifie réellement avec `tasklist` que tous les `NovaBlock.exe` ont disparu.
+- Il attend jusqu'à 35 secondes au lieu de supposer que 6+2 secondes suffisent.
+- Il retente `taskkill` / `Stop-Process` pour les anciennes versions ou processus bloqués.
+- Même après disparition des processus, il laisse 2 secondes à Windows pour libérer l'image de l'exécutable.
+- Le `move /Y` est ensuite retenté jusqu'à 12 fois si le fichier reste momentanément occupé.
+- Si NovaBlock refuse toujours de s'arrêter, l'update s'annule proprement et réarme l'ancienne installation au lieu de tenter un remplacement voué à échouer.
+
+### Fonctionnalités conservées de v1.0.30
+
+- Détection des sites personnels depuis l'URL réelle de l'onglet actif via Windows UI Automation.
+- Fallback par titre de l'onglet.
+- Contrôle environ toutes les 100 ms.
+- Section `Sites personnels surveillés pour popup` dans l'interface avec la liste exacte lue depuis `config.dat`.
+- Aucun nouvel email.
 
 ### Installation
 
-Télécharger `update.bat` dans cette release puis l'exécuter en administrateur. Il remplace le `NovaBlock.exe` installé et conserve la configuration existante dans `C:\ProgramData\NovaBlock`.
-
-### Nouveau comportement
-
-- Les sites personnels sont maintenant comparés à l'URL réelle de l'onglet actif via Windows UI Automation, au lieu de dépendre uniquement du titre de l'onglet.
-- Le titre reste utilisé en fallback si l'URL n'est pas accessible.
-- Le monitor vérifie la fenêtre active environ toutes les 100 ms pour déclencher le popup dès que possible.
-- Les domaines personnalisés correspondent aussi à leurs sous-domaines.
-- Les URLs précises correspondent à la page configurée et à ses descendants.
-- La fenêtre principale NovaBlock affiche désormais une section `Sites personnels surveillés pour popup` avec la liste exacte lue depuis `config.dat`, le nombre d'entrées et l'état de la détection URL réelle.
-- La liste se met à jour automatiquement après ajout/suppression, sans redémarrage.
-
-### Pourquoi
-
-La v1.0.29 essayait surtout de reconnaître les sites perso depuis le titre de l'onglet. Certains sites utilisent des titres qui ne contiennent jamais leur domaine, donc aucun popup n'apparaissait. La v1.0.30 corrige ce point en lisant l'adresse active elle-même.
-
-### Inchangé
-
-Aucun nouvel email n'est envoyé. Le système de code, le cooldown de désinstallation, les filtres adultes, le watchdog et la relance automatique restent inchangés.
-
-### Validation
-
-Tous les tests `test_*.py` doivent réussir sur Windows, puis le véritable `NovaBlock.exe` compilé passe l'autotest runtime avant publication.
+Télécharger `update.bat` de cette release puis l'exécuter en administrateur. La configuration existante dans `C:\ProgramData\NovaBlock` est conservée.
