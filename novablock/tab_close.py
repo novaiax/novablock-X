@@ -2,7 +2,7 @@
 
 This module deliberately never terminates the browser process. The target
 HWND is captured by the monitor when the popup is created; on explicit user
-dismissal we restore/focus that same browser window and send one Ctrl+W.
+dismissal we restore/focus that same browser window and send one Ctrl+F4.
 """
 import ctypes
 import logging
@@ -11,10 +11,9 @@ from ctypes import wintypes
 
 log = logging.getLogger("novablock.tab_close")
 
-WM_NULL = 0x0000
 SW_RESTORE = 9
 VK_CONTROL = 0x11
-VK_W = 0x57
+VK_F4 = 0x73
 KEYEVENTF_KEYUP = 0x0002
 
 
@@ -71,12 +70,12 @@ def close_one_tab(hwnd: int) -> bool:
         # Give the browser a brief moment to become the keyboard target.
         time.sleep(0.08)
 
-        # Exactly one Ctrl+W sequence: closes the active tab in this window.
+        # Exactly one Ctrl+F4 sequence: closes the active tab in this window.
         user32.keybd_event(VK_CONTROL, 0, 0, 0)
-        user32.keybd_event(VK_W, 0, 0, 0)
-        user32.keybd_event(VK_W, 0, KEYEVENTF_KEYUP, 0)
+        user32.keybd_event(VK_F4, 0, 0, 0)
+        user32.keybd_event(VK_F4, 0, KEYEVENTF_KEYUP, 0)
         user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
-        log.info("Sent one Ctrl+W to browser hwnd=%s pid=%s", hwnd, pid.value)
+        log.info("Sent one Ctrl+F4 to browser hwnd=%s pid=%s", hwnd, pid.value)
         return True
     except Exception as e:
         log.warning("Could not close target tab hwnd=%s: %s", hwnd, e)
