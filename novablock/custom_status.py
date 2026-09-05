@@ -1,4 +1,5 @@
 """Compact NovaBlock main window with explicit popup-only custom sites."""
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox, ttk
@@ -19,6 +20,22 @@ class StatusWindow(BaseStatusWindow):
     HEIGHT = 700
 
     def _build(self) -> None:
+        # Move <=1.0.31 custom entries to popup-only storage before anything
+        # displays them. If this was the first migration, rebuild the adult
+        # network layers once in background so stale custom hosts/policies are
+        # removed without freezing the UI.
+        migrated = False
+        try:
+            migrated = config.migrate_custom_sites_to_popup_only()
+        except Exception:
+            migrated = False
+        if migrated:
+            threading.Thread(
+                target=self._cleanup_legacy_network_custom_blocks,
+                name="NovaBlockCustomPopupMigration",
+                daemon=True,
+            ).start()
+
         # BaseStatusWindow.__init__ initially centers the legacy 520x480 size.
         # Override it once here and never resize again during refresh.
         _center(self.root, self.WIDTH, self.HEIGHT)
@@ -27,7 +44,6 @@ class StatusWindow(BaseStatusWindow):
         outer = tk.Frame(self.root, bg=BG, padx=22, pady=18)
         outer.pack(fill="both", expand=True)
 
-        # Header / live status
         top = tk.Frame(outer, bg=BG)
         top.pack(fill="x")
         tk.Label(top, text="NovaBlock", font=FONT_LG,
@@ -42,7 +58,6 @@ class StatusWindow(BaseStatusWindow):
         )
         self.stats_lbl.pack(fill="x", pady=(5, 10))
 
-        # Main unlock actions
         unlock_row = tk.Frame(outer, bg=BG)
         unlock_row.pack(fill="x", pady=(0, 5))
         self.unlock_btn = tk.Button(
@@ -67,7 +82,6 @@ class StatusWindow(BaseStatusWindow):
 
         ttk.Separator(outer).pack(fill="x", pady=(2, 9))
 
-        # Custom popup sites card
         panel = tk.Frame(
             outer, bg="white", padx=13, pady=11,
             highlightbackground="#dfe6e9", highlightthickness=1,
@@ -130,7 +144,6 @@ class StatusWindow(BaseStatusWindow):
 
         ttk.Separator(outer).pack(fill="x", pady=(11, 8))
 
-        # Uninstall controls
         self.uninstall_btn = tk.Button(
             outer, text="Désinstaller NovaBlock (cooldown 7 jours)",
             font=FONT_SM, bg="#dfe6e9", fg=ACCENT, relief="flat",
@@ -152,6 +165,17 @@ class StatusWindow(BaseStatusWindow):
 
         self._refresh_job = None
 
+    @staticmethod
+    def _cleanup_legacy_network_custom_blocks() -> None:
+        """One-time cleanup; never sends mail and never kills browsers."""
+        try:
+            from . import blocker
+            blocker.apply_full_block(kill_browsers=False)
+        except Exception:
+            # The watchdog can repair again later; migration itself is already
+            # safe because network getters now always return empty custom lists.
+            pass
+
     def _refresh_custom_sites_panel(self) -> None:
         domains = config.get_popup_domains()
         urls = config.get_popup_urls()
@@ -166,8 +190,6 @@ class StatusWindow(BaseStatusWindow):
             self.custom_sites_list.insert("end", "(aucun site personnel enregistré)")
 
     def _refresh(self) -> None:
-        # Cancel the previous scheduled refresh when a button calls _refresh()
-        # manually. This prevents multiple timers accumulating over time.
         if getattr(self, "_refresh_job", None):
             try:
                 self.root.after_cancel(self._refresh_job)
@@ -236,24 +258,21 @@ class StatusWindow(BaseStatusWindow):
         entry = tk.Entry(dlg, font=FONT_MD, relief="solid", bd=1)
         entry.pack(fill="x", padx=20, pady=(10, 5), ipady=4)
         entry.focus_set()
-        hint = tk.Label(
+        tk.Label(
             dlg,
             text="Aucun blocage DNS/hosts : le site commence à charger puis le popup apparaît.",
             font=("Segoe UI", 9), fg=MUTED, bg=BG, wraplength=455, justify="left",
-        )
-        hint.pack(anchor="w", padx=20)
+        ).pack(anchor="w", padx=20)
 
         def _add():
             raw = entry.get().strip()
-            if scope.get() == "domain":
-                added = config.add_custom_domain(raw)
-            else:
-                added = config.add_custom_url(raw)
+            added = (config.add_custom_domain(raw)
+                     if scope.get() == "domain" else config.add_custom_url(raw))
             if not added:
-                if "movix.cash" in raw.lower():
-                    msg = "movix.cash est explicitement autorisé et ne peut pas être ajouté à cette liste."
-                else:
-                    msg = f"Entrée invalide : {raw}"
+                msg = (
+                    "movix.cash est explicitement autorisé et ne peut pas être ajouté à cette liste."
+                    if "movix.cash" in raw.lower() else f"Entrée invalide : {raw}"
+                )
                 messagebox.showerror("Impossible d'ajouter", msg, parent=dlg)
                 return
             dlg.destroy()
