@@ -70,8 +70,6 @@ ADULT_KEYWORDS_WORD = [
 ]
 ADULT_KEYWORDS = ADULT_KEYWORDS_SUBSTRING + ADULT_KEYWORDS_WORD
 
-# Accessible names used by common browsers for their address bar. Geometry is
-# also checked, so localization differences do not make this list mandatory.
 _ADDRESS_NAME_HINTS = (
     "address", "adresse", "omnibox", "url", "search or enter",
     "search google or type a url", "rechercher ou saisir",
@@ -83,7 +81,6 @@ class WindowMonitor:
     def __init__(self, on_detect: Callable[[str, str, int], None],
                  poll_interval: float = 0.5):
         self.on_detect = on_detect
-        # 10 checks/s: visually immediate once navigation is committed.
         self.poll_interval = min(max(float(poll_interval), 0.05), 0.10)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -162,9 +159,8 @@ class WindowMonitor:
         self._custom_cache_until = now + 0.25
         try:
             from . import config
-            # The getters apply the custom allowlist (including movix.cash).
-            domains = [self._normalize_host(v) for v in config.get_custom_domains()]
-            urls = [self._normalize_url(v) for v in config.get_custom_urls()]
+            domains = [self._normalize_host(v) for v in config.get_popup_domains()]
+            urls = [self._normalize_url(v) for v in config.get_popup_urls()]
             self._custom_domains = sorted({d for d in domains if d}, key=len, reverse=True)
             self._custom_urls = sorted({u for u in urls if u}, key=len, reverse=True)
         except Exception as e:
@@ -218,11 +214,6 @@ class WindowMonitor:
 
     @staticmethod
     def _control_is_near_browser_top(control, window) -> bool:
-        """Reject page form fields that merely contain a URL.
-
-        The address bar lives in the browser chrome, near the top edge. We
-        accept only controls inside the top 22% (minimum 140px) of the window.
-        """
         try:
             cr = control.rectangle()
             wr = window.rectangle()
@@ -234,11 +225,9 @@ class WindowMonitor:
     def _read_address_bar(self, hwnd: int) -> tuple[str, bool]:
         """Return (address_text, address_bar_has_keyboard_focus).
 
-        A matching URL is deliberately ignored while the address bar has
-        keyboard focus. That is the key distinction between *typing a site*
-        and *having actually navigated to it*. Once Enter commits navigation,
-        browsers normally move focus out of the omnibox and detection becomes
-        active on the next ~100ms tick.
+        Matching while the bar is focused is suppressed: typing/pasting is not
+        navigation. After Enter/click navigation commits and the browser leaves
+        address editing, the same URL becomes eligible on the next ~100ms tick.
         """
         if not HAS_UIA or (not self._custom_domains and not self._custom_urls):
             return "", False
@@ -274,14 +263,11 @@ class WindowMonitor:
                 url_value = next((v for v in values if self._looks_like_url(v)), "")
                 if not url_value:
                     continue
-                # Prefer explicitly named address controls, otherwise choose the
-                # highest URL-looking edit/combobox in browser chrome.
                 try:
                     y = control.rectangle().top
                 except Exception:
                     y = best_y
-                named_address = any(hint in name for hint in _ADDRESS_NAME_HINTS)
-                if named_address:
+                if any(hint in name for hint in _ADDRESS_NAME_HINTS):
                     y -= 10000
                 if y < best_y:
                     best_y = y
@@ -294,24 +280,17 @@ class WindowMonitor:
         return best_url, best_focused
 
     def _match_committed_custom_navigation(self, hwnd: int) -> Optional[str]:
-        """Custom popup gate: URL must match AND address editing must be over."""
+        """Custom popup gate: URL must match and address editing must be over."""
         self._reload_custom_config()
         if not self._custom_domains and not self._custom_urls:
             return None
         address, editing = self._read_address_bar(hwnd)
         if editing:
-            # Typing/pasting/reading a URL in the omnibox is NOT navigation.
             return None
         return self._match_custom_url(address)
 
     def _check_title(self, title: str) -> Optional[str]:
-        """Adult-content title detection only.
-
-        Custom sites are intentionally absent here. A custom site's name may
-        appear in another page, search result, message, document, or title and
-        must not trigger anything unless the browser is actually navigating to
-        that custom URL.
-        """
+        """Adult-content title detection only; custom sites never use titles."""
         t = title.lower()
         for kw in ADULT_KEYWORDS_SUBSTRING:
             if kw in t:
