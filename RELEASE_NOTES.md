@@ -6,14 +6,14 @@ Le comportement du bouton du popup est maintenant strict :
 
 - L'apparition du popup ne ferme plus aucun onglet automatiquement.
 - NovaBlock mémorise la fenêtre navigateur (`HWND`) qui a déclenché le popup.
-- Quand tu cliques sur `Fermer l'onglet`, NovaBlock masque le popup, redonne le focus à cette fenêtre précise et envoie exactement un `Ctrl+W`.
+- Quand tu cliques sur `Fermer l'onglet`, NovaBlock masque le popup, redonne le focus à cette fenêtre précise et envoie exactement un `Ctrl+F4`.
 - Le popup se ferme ensuite.
 - Le fallback qui pouvait tuer tout le processus Chrome/Edge/Firefox a été supprimé.
 - En cas d'échec de fermeture de l'onglet, NovaBlock n'escalade jamais vers la fermeture complète du navigateur.
 
 ### Comportement attendu
 
-`navigation vers un site surveillé → popup → clic Fermer l'onglet → seul l'onglet actif qui a déclenché NovaBlock est fermé → les autres onglets restent ouverts`.
+`navigation vers un site surveillé → popup → clic Fermer l'onglet → Ctrl+F4 sur la fenêtre qui a déclenché → seul l'onglet actif ciblé est fermé → les autres onglets restent ouverts`.
 
 ### Conservé de v1.0.32
 
