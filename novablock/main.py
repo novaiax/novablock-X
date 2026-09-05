@@ -109,7 +109,7 @@ def ensure_persistence() -> None:
 def run_app() -> None:
     """Main app loop: tray + watchdog + monitor + hidden status window."""
     from .custom_status import StatusWindow
-    from .gui import BlockedPopup
+    from .popup import BlockedPopup
     from .watchdog import Watchdog
     from .monitor import WindowMonitor
     from .tray import Tray
