@@ -1,8 +1,9 @@
 """Fast foreground-browser monitor.
 
-Adult detection uses the page title. User-added sites use the real active-tab
-URL through Windows UI Automation, with title matching as a fallback. Custom
-configuration is reloaded live from config.dat.
+Adult detection uses the page title. User-added sites are different: they are
+matched only against the browser address bar after navigation is engaged.
+Merely typing, displaying or mentioning a custom-site address must never show
+a popup.
 """
 import logging
 import re
@@ -69,27 +70,26 @@ ADULT_KEYWORDS_WORD = [
 ]
 ADULT_KEYWORDS = ADULT_KEYWORDS_SUBSTRING + ADULT_KEYWORDS_WORD
 
-_CUSTOM_TOKEN_BLACKLIST = {
-    "www", "com", "net", "org", "fr", "io", "app", "co", "tv",
-    "home", "index", "login", "account", "search", "www2",
-}
+_ADDRESS_NAME_HINTS = (
+    "address", "adresse", "omnibox", "url", "search or enter",
+    "search google or type a url", "rechercher ou saisir",
+    "rechercher avec", "entrer une adresse", "saisir une adresse",
+)
 
 
 class WindowMonitor:
     def __init__(self, on_detect: Callable[[str, str, int], None],
                  poll_interval: float = 0.5):
         self.on_detect = on_detect
-        # 10 checks/s: visually immediate once the browser exposes the URL/title.
         self.poll_interval = min(max(float(poll_interval), 0.05), 0.10)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._cooldown_until = 0.0
         self._custom_cache_until = 0.0
-        self._custom_tokens: list[str] = []
         self._custom_domains: list[str] = []
         self._custom_urls: list[str] = []
         self._browser_cache: dict[int, tuple[float, bool]] = {}
-        self._url_cache: dict[int, tuple[float, str]] = {}
+        self._address_cache: dict[int, tuple[float, str, bool]] = {}
 
     def start(self) -> None:
         if not HAS_WIN32:
@@ -101,7 +101,7 @@ class WindowMonitor:
         self._thread = threading.Thread(target=self._loop, daemon=True,
                                         name="NovaBlockMonitor")
         self._thread.start()
-        log.info("Monitor started (poll=%.0fms, URL-UIA=%s)",
+        log.info("Monitor started (poll=%.0fms, navigation-UIA=%s)",
                  self.poll_interval * 1000, HAS_UIA)
 
     def stop(self) -> None:
@@ -152,19 +152,6 @@ class WindowMonitor:
         except Exception:
             return ""
 
-    @staticmethod
-    def _host_tokens(raw: str) -> set[str]:
-        host = WindowMonitor._normalize_host(raw)
-        if not host:
-            return set()
-        tokens = {host}
-        for label in host.split("."):
-            if label not in _CUSTOM_TOKEN_BLACKLIST and len(label) >= 3:
-                tokens.add(label)
-        if host == "x.com":
-            tokens.add("__x_brand__")
-        return tokens
-
     def _reload_custom_config(self) -> None:
         now = time.monotonic()
         if now < self._custom_cache_until:
@@ -172,37 +159,15 @@ class WindowMonitor:
         self._custom_cache_until = now + 0.25
         try:
             from . import config
-            cfg = config.load()
-            domains: list[str] = []
-            urls: list[str] = []
-            tokens: set[str] = set()
-            for raw in cfg.get("custom_blocked_domains", []) or []:
-                host = self._normalize_host(str(raw))
-                if host:
-                    domains.append(host)
-                    tokens.update(self._host_tokens(host))
-            for raw in cfg.get("custom_blocked_urls", []) or []:
-                normalized = self._normalize_url(str(raw))
-                if normalized:
-                    urls.append(normalized)
-                    tokens.update(self._host_tokens(str(raw)))
-            self._custom_domains = sorted(set(domains), key=len, reverse=True)
-            self._custom_urls = sorted(set(urls), key=len, reverse=True)
-            self._custom_tokens = sorted(tokens, key=len, reverse=True)
+            domains = [self._normalize_host(v) for v in config.get_popup_domains()]
+            urls = [self._normalize_url(v) for v in config.get_popup_urls()]
+            self._custom_domains = sorted({d for d in domains if d}, key=len, reverse=True)
+            self._custom_urls = sorted({u for u in urls if u}, key=len, reverse=True)
         except Exception as e:
             log.debug("custom popup config reload failed: %s", e)
 
-    @staticmethod
-    def _token_in_title(token: str, title_lower: str) -> bool:
-        if token == "__x_brand__":
-            return bool(re.search(r"(?:^|[\s|\-–—•])x(?:$|[\s|\-–—•])", title_lower))
-        if "." in token:
-            return token in title_lower
-        return bool(re.search(r"(?<![a-z0-9])" + re.escape(token) + r"(?![a-z0-9])",
-                              title_lower))
-
     def _match_custom_url(self, raw_url: str) -> Optional[str]:
-        """Return the configured custom entry matching the actual active URL."""
+        """Match only an actual browser address, never arbitrary visible text."""
         self._reload_custom_config()
         if not raw_url or (not self._custom_domains and not self._custom_urls):
             return None
@@ -214,9 +179,9 @@ class WindowMonitor:
             if host == domain or host.endswith("." + domain):
                 return domain
         for configured in self._custom_urls:
-            # Precise URL entries match that page and descendants/query variants.
-            if normalized == configured or normalized.startswith(configured.rstrip("/") + "/") \
-               or normalized.startswith(configured + "?"):
+            if (normalized == configured
+                    or normalized.startswith(configured.rstrip("/") + "/")
+                    or normalized.startswith(configured + "?")):
                 return configured
         return None
 
@@ -227,20 +192,53 @@ class WindowMonitor:
             return False
         return v.startswith(("http://", "https://")) or "." in v.split("/")[0]
 
-    def _read_active_browser_url(self, hwnd: int) -> str:
-        """Read address-bar URL with Windows UI Automation.
+    @staticmethod
+    def _control_has_focus(control) -> bool:
+        try:
+            return bool(control.has_keyboard_focus())
+        except Exception:
+            try:
+                return bool(control.element_info.element.CurrentHasKeyboardFocus)
+            except Exception:
+                return False
 
-        pywinauto exposes Chrome/Edge/Brave/Firefox address-bar controls via
-        UIA. We inspect edit/combobox values and keep only URL-looking values.
-        A very short cache avoids hammering COM while preserving ~100ms latency.
+    @staticmethod
+    def _control_name(control) -> str:
+        try:
+            return str(control.element_info.name or "").strip().lower()
+        except Exception:
+            try:
+                return str(control.window_text() or "").strip().lower()
+            except Exception:
+                return ""
+
+    @staticmethod
+    def _control_is_near_browser_top(control, window) -> bool:
+        try:
+            cr = control.rectangle()
+            wr = window.rectangle()
+            max_y = wr.top + max(140, int((wr.bottom - wr.top) * 0.22))
+            return cr.top >= wr.top and cr.top <= max_y
+        except Exception:
+            return False
+
+    def _read_address_bar(self, hwnd: int) -> tuple[str, bool]:
+        """Return (address_text, address_bar_has_keyboard_focus).
+
+        Matching while the bar is focused is suppressed: typing/pasting is not
+        navigation. After Enter/click navigation commits and the browser leaves
+        address editing, the same URL becomes eligible on the next ~100ms tick.
         """
-        if not HAS_UIA or not self._custom_domains and not self._custom_urls:
-            return ""
+        if not HAS_UIA or (not self._custom_domains and not self._custom_urls):
+            return "", False
         now = time.monotonic()
-        cached = self._url_cache.get(hwnd)
+        cached = self._address_cache.get(hwnd)
         if cached and now < cached[0]:
-            return cached[1]
-        found = ""
+            return cached[1], cached[2]
+
+        best_url = ""
+        best_focused = False
+        best_y = 10**9
         try:
             window = Desktop(backend="uia").window(handle=hwnd)
             controls = []
@@ -249,36 +247,51 @@ class WindowMonitor:
                     controls.extend(window.descendants(control_type=control_type))
                 except Exception:
                     pass
-            # The address bar is normally near the top and exposes a Value
-            # pattern. Match against configured sites first to avoid mistaking
-            # a page form field containing a URL for the browser address bar.
-            candidates: list[str] = []
+
             for control in controls:
+                if not self._control_is_near_browser_top(control, window):
+                    continue
+                name = self._control_name(control)
+                values: list[str] = []
                 for getter in ("get_value", "window_text"):
                     try:
                         value = str(getattr(control, getter)() or "").strip()
                     except Exception:
                         continue
-                    if value and self._looks_like_url(value):
-                        candidates.append(value)
-            for value in candidates:
-                if self._match_custom_url(value):
-                    found = value
-                    break
-            if not found and candidates:
-                found = candidates[0]
+                    if value and value not in values:
+                        values.append(value)
+                url_value = next((v for v in values if self._looks_like_url(v)), "")
+                if not url_value:
+                    continue
+                try:
+                    y = control.rectangle().top
+                except Exception:
+                    y = best_y
+                if any(hint in name for hint in _ADDRESS_NAME_HINTS):
+                    y -= 10000
+                if y < best_y:
+                    best_y = y
+                    best_url = url_value
+                    best_focused = self._control_has_focus(control)
         except Exception as e:
-            log.debug("UIA URL read failed hwnd=%s: %s", hwnd, e)
-        self._url_cache[hwnd] = (now + 0.08, found)
-        return found
+            log.debug("UIA address read failed hwnd=%s: %s", hwnd, e)
+
+        self._address_cache[hwnd] = (now + 0.06, best_url, best_focused)
+        return best_url, best_focused
+
+    def _match_committed_custom_navigation(self, hwnd: int) -> Optional[str]:
+        """Custom popup gate: URL must match and address editing must be over."""
+        self._reload_custom_config()
+        if not self._custom_domains and not self._custom_urls:
+            return None
+        address, editing = self._read_address_bar(hwnd)
+        if editing:
+            return None
+        return self._match_custom_url(address)
 
     def _check_title(self, title: str) -> Optional[str]:
+        """Adult-content title detection only; custom sites never use titles."""
         t = title.lower()
-        self._reload_custom_config()
-        # Fallback for browsers/pages where UIA address-bar access is absent.
-        for token in self._custom_tokens:
-            if self._token_in_title(token, t):
-                return token.replace("__x_brand__", "x.com")
         for kw in ADULT_KEYWORDS_SUBSTRING:
             if kw in t:
                 return kw
@@ -304,14 +317,9 @@ class WindowMonitor:
                 title = win32gui.GetWindowText(hwnd) or ""
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 if self._is_browser(pid):
-                    self._reload_custom_config()
-                    hit = None
-                    if self._custom_domains or self._custom_urls:
-                        active_url = self._read_active_browser_url(hwnd)
-                        hit = self._match_custom_url(active_url)
-                        if hit:
-                            log.warning("Custom site URL detected: %r (matched %r) hwnd=%s",
-                                        active_url, hit, hwnd)
+                    hit = self._match_committed_custom_navigation(hwnd)
+                    if hit:
+                        log.warning("Committed custom navigation detected: %r hwnd=%s", hit, hwnd)
                     if not hit:
                         hit = self._check_title(title)
                     if hit:

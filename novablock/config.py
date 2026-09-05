@@ -1,10 +1,16 @@
 import json
 import time
 from typing import Any
+from urllib.parse import urlsplit
 
 from .crypto import encrypt_machine, decrypt_machine
 from .paths import CONFIG_FILE, ensure_dirs
 
+
+# Sites intentionally excluded from user-defined popup monitoring.
+# movix.cash remains protected by the normal adult-keyword monitor, but simply
+# visiting the streaming site must not trigger a custom-site popup.
+CUSTOM_SITE_ALLOWLIST = {"movix.cash"}
 
 DEFAULTS: dict[str, Any] = {
     "version": 1,
@@ -23,18 +29,19 @@ DEFAULTS: dict[str, Any] = {
     "from_email": "novablock@resend.dev",
     "code_rotation_ts": 0,
     "code_rotation_days": 7,
+    # Legacy network-block keys retained only for migration from <=1.0.31.
     "custom_blocked_domains": [],
-    # Custom URLBlocklist patterns (full URLs the user wanted blocked
-    # precisely, without taking down the rest of the domain). Applied by
-    # browser_policies.apply_all_browser_policies on top of the curated
-    # Reddit NSFW list.
     "custom_blocked_urls": [],
+    # v1.0.32+: user-added sites live here and are popup-only.
+    "custom_popup_domains": [],
+    "custom_popup_urls": [],
+    "custom_popup_only_migrated": False,
     "machine_name": "",
 }
 
 
 def _normalize_domain(d: str) -> str:
-    d = d.strip().lower()
+    d = (d or "").strip().lower()
     for prefix in ("https://", "http://"):
         if d.startswith(prefix):
             d = d[len(prefix):]
@@ -44,42 +51,8 @@ def _normalize_domain(d: str) -> str:
     return d
 
 
-def add_custom_domain(domain: str) -> str:
-    """Add a domain to the user-defined block list.
-    Returns the canonical form added (or empty string if invalid)."""
-    d = _normalize_domain(domain)
-    if not d or "." not in d or " " in d:
-        return ""
-    cfg = load()
-    customs = cfg.setdefault("custom_blocked_domains", [])
-    if d in customs:
-        return d
-    customs.append(d)
-    save(cfg)
-    return d
-
-
-def remove_custom_domain(domain: str) -> bool:
-    d = _normalize_domain(domain)
-    cfg = load()
-    customs = cfg.get("custom_blocked_domains", [])
-    if d in customs:
-        customs.remove(d)
-        cfg["custom_blocked_domains"] = customs
-        save(cfg)
-        return True
-    return False
-
-
-def get_custom_domains() -> list[str]:
-    return list(load().get("custom_blocked_domains", []))
-
-
 def _normalize_url(u: str) -> str:
-    """Lighter than _normalize_domain — we WANT to preserve the path so a
-    URLBlocklist pattern targets the exact page the user typed. We just
-    enforce a scheme (default https://) and strip surrounding whitespace."""
-    u = u.strip()
+    u = (u or "").strip()
     if not u:
         return ""
     if not (u.startswith("http://") or u.startswith("https://")):
@@ -87,40 +60,143 @@ def _normalize_url(u: str) -> str:
     return u
 
 
-def add_custom_url(url: str) -> str:
-    """Add a precise URL to the user-defined URLBlocklist patterns. The
-    browser refuses to load any URL matching the pattern; the rest of the
-    domain stays reachable. Returns the canonical form added (or empty
-    string if invalid)."""
-    u = _normalize_url(url)
-    # Reject bare domains: those go through add_custom_domain instead.
-    # An entry without any path is just `https://host` — block the WHOLE
-    # site, not a precise URL. The UI uses a radio button to route the
-    # user's intent; this is the technical guard.
-    if not u or " " in u or "." not in u:
+def _url_host(u: str) -> str:
+    raw = _normalize_url(u)
+    if not raw:
+        return ""
+    try:
+        return (urlsplit(raw).hostname or "").lower().removeprefix("www.")
+    except Exception:
+        return ""
+
+
+def _is_custom_allowed_host(host: str) -> bool:
+    host = (host or "").lower().removeprefix("www.")
+    return any(host == allowed or host.endswith("." + allowed)
+               for allowed in CUSTOM_SITE_ALLOWLIST)
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
+def _combined_popup_domains(cfg: dict[str, Any]) -> list[str]:
+    # Include legacy values until migration has persisted them, so an update
+    # can never make the user's custom popup list appear to vanish.
+    values = list(cfg.get("custom_popup_domains", []) or [])
+    values += list(cfg.get("custom_blocked_domains", []) or [])
+    domains = [_normalize_domain(str(v)) for v in values]
+    return _dedupe([
+        d for d in domains if d and not _is_custom_allowed_host(d)
+    ])
+
+
+def _combined_popup_urls(cfg: dict[str, Any]) -> list[str]:
+    values = list(cfg.get("custom_popup_urls", []) or [])
+    values += list(cfg.get("custom_blocked_urls", []) or [])
+    urls = [_normalize_url(str(v)) for v in values]
+    return _dedupe([
+        u for u in urls if u and not _is_custom_allowed_host(_url_host(u))
+    ])
+
+
+def migrate_custom_sites_to_popup_only() -> bool:
+    """Move <=1.0.31 custom blocks to popup-only storage exactly once.
+
+    The old keys are emptied so stale data cannot be reused by old network
+    layers. movix.cash is discarded during migration.
+    """
+    cfg = load()
+    if cfg.get("custom_popup_only_migrated"):
+        return False
+    cfg["custom_popup_domains"] = _combined_popup_domains(cfg)
+    cfg["custom_popup_urls"] = _combined_popup_urls(cfg)
+    cfg["custom_blocked_domains"] = []
+    cfg["custom_blocked_urls"] = []
+    cfg["custom_popup_only_migrated"] = True
+    save(cfg)
+    return True
+
+
+def add_custom_domain(domain: str) -> str:
+    """Add a domain to the popup-only monitor list."""
+    d = _normalize_domain(domain)
+    if not d or "." not in d or " " in d or _is_custom_allowed_host(d):
         return ""
     cfg = load()
-    customs = cfg.setdefault("custom_blocked_urls", [])
-    if u in customs:
-        return u
-    customs.append(u)
+    customs = _combined_popup_domains(cfg)
+    if d not in customs:
+        customs.append(d)
+    cfg["custom_popup_domains"] = _dedupe(customs)
+    cfg["custom_blocked_domains"] = []
+    save(cfg)
+    return d
+
+
+def remove_custom_domain(domain: str) -> bool:
+    d = _normalize_domain(domain)
+    cfg = load()
+    customs = _combined_popup_domains(cfg)
+    if d not in customs:
+        return False
+    customs.remove(d)
+    cfg["custom_popup_domains"] = customs
+    cfg["custom_blocked_domains"] = []
+    save(cfg)
+    return True
+
+
+def get_popup_domains() -> list[str]:
+    return _combined_popup_domains(load())
+
+
+def add_custom_url(url: str) -> str:
+    """Add a precise URL to the popup-only monitor list."""
+    u = _normalize_url(url)
+    if not u or " " in u or "." not in u or _is_custom_allowed_host(_url_host(u)):
+        return ""
+    cfg = load()
+    customs = _combined_popup_urls(cfg)
+    if u not in customs:
+        customs.append(u)
+    cfg["custom_popup_urls"] = _dedupe(customs)
+    cfg["custom_blocked_urls"] = []
     save(cfg)
     return u
 
 
 def remove_custom_url(url: str) -> bool:
+    u = _normalize_url(url)
     cfg = load()
-    customs = cfg.get("custom_blocked_urls", [])
-    if url in customs:
-        customs.remove(url)
-        cfg["custom_blocked_urls"] = customs
-        save(cfg)
-        return True
-    return False
+    customs = _combined_popup_urls(cfg)
+    if u not in customs:
+        return False
+    customs.remove(u)
+    cfg["custom_popup_urls"] = customs
+    cfg["custom_blocked_urls"] = []
+    save(cfg)
+    return True
+
+
+def get_popup_urls() -> list[str]:
+    return _combined_popup_urls(load())
+
+
+# Compatibility API consumed by blocker.py/browser_policies.py. Custom sites
+# are popup-only from v1.0.32 onward, so the network layers always receive an
+# empty list even before the one-time config migration has run.
+def get_custom_domains() -> list[str]:
+    return []
 
 
 def get_custom_urls() -> list[str]:
-    return list(load().get("custom_blocked_urls", []))
+    return []
 
 
 def needs_code_rotation() -> bool:
