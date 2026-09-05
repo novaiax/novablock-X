@@ -1,40 +1,33 @@
-## NovaBlock v1.0.32 : popup seulement après navigation réelle
+## NovaBlock v1.0.33 : fermer uniquement l'onglet qui a déclenché le popup
 
-### Comportement des sites personnels
+### Correctif principal
 
-Les sites ajoutés dans `Sites personnels surveillés pour popup` sont maintenant **popup uniquement**.
+Le comportement du bouton du popup est maintenant strict :
 
-- Taper ou coller l'adresse dans la barre du navigateur ne déclenche rien.
-- Voir le nom du site dans une page, un résultat Google, un message ou un titre ne déclenche rien.
-- Le mot `pro` ou tout autre fragment provenant d'un domaine personnel ne peut plus devenir un faux mot-clé.
-- Après validation de la navigation (Entrée / clic vers le site), NovaBlock lit l'adresse réellement engagée et peut déclencher le popup au prochain contrôle (~100 ms).
-- Les sites personnels ne sont plus injectés dans `hosts` ni dans Chromium `URLBlocklist` : ils ne sont donc plus bloqués avant que le popup puisse apparaître.
-- Les anciennes règles réseau personnalisées sont migrées et nettoyées une fois après mise à jour.
+- L'apparition du popup ne ferme plus aucun onglet automatiquement.
+- NovaBlock mémorise la fenêtre navigateur (`HWND`) qui a déclenché le popup.
+- Quand tu cliques sur `Fermer l'onglet`, NovaBlock masque le popup, redonne le focus à cette fenêtre précise et envoie exactement un `Ctrl+W`.
+- Le popup se ferme ensuite.
+- Le fallback qui pouvait tuer tout le processus Chrome/Edge/Firefox a été supprimé.
+- En cas d'échec de fermeture de l'onglet, NovaBlock n'escalade jamais vers la fermeture complète du navigateur.
 
-### movix.cash
+### Comportement attendu
 
-`movix.cash` est explicitement retiré des sites personnels surveillés et ne peut plus être ajouté à cette liste. Les anciennes entrées `movix.cash` sont supprimées automatiquement lors de la migration.
+`navigation vers un site surveillé → popup → clic Fermer l'onglet → seul l'onglet actif qui a déclenché NovaBlock est fermé → les autres onglets restent ouverts`.
 
-Le filtre adulte général reste indépendant : un véritable mot-clé adulte dans le titre peut toujours déclencher NovaBlock.
+### Conservé de v1.0.32
 
-### Interface
-
-La fenêtre principale a été remise au propre :
-
-- taille unique et fixe : 620 × 700 (adaptée au DPI par Windows) ;
-- plus d'agrandissement au fil des refresh ;
-- liste des sites personnels visible directement ;
-- compteur d'entrées actif ;
-- état clair : `Navigation réelle uniquement • saisie/texte ignorés • contrôle ~100 ms` ;
-- ajout/suppression compactes, sans réappliquer DNS/hosts à chaque modification.
-
-### Updater
-
-Le correctif robuste de v1.0.31 est conservé : attente de l'arrêt réel de tous les processus NovaBlock, libération du fichier puis plusieurs tentatives de remplacement de l'exécutable en cas de verrou Windows temporaire.
+- Sites personnels = popup uniquement après navigation réellement engagée.
+- Aucun popup pendant la saisie dans la barre d'adresse ou parce qu'une adresse apparaît dans une page.
+- `movix.cash` exclu des sites personnels surveillés.
+- Faux positif `pro` supprimé.
+- Interface principale compacte et fixe.
+- Sites adultes de base toujours protégés par DNS/hosts/policies + monitor en secours.
+- Updater robuste contre les fichiers `NovaBlock.exe` temporairement verrouillés.
 
 ### Inchangé
 
-Aucun nouvel email n'est envoyé. Les règles d'envoi d'emails, le code, la rotation silencieuse, le cooldown de désinstallation, les filtres adultes, le watchdog et la relance automatique restent inchangés.
+Aucun nouvel email n'est envoyé. Le code, la rotation silencieuse, le cooldown de désinstallation, le watchdog et la relance automatique restent inchangés.
 
 ### Validation
 
