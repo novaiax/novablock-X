@@ -2,7 +2,7 @@ name: Windows executable release
 
 on:
   push:
-    branches: [main, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix]
+    branches: [main, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
     paths: [RELEASE_VERSION]
   workflow_dispatch:
 
@@ -74,7 +74,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create $env:RELEASE_TAG dist-release/NovaBlock.exe dist-release/update.bat dist-release/NovaBlock-Outils.zip dist-release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "NovaBlock $env:RELEASE_TAG - Popup apres navigation" --notes-file RELEASE_NOTES.md --draft
+          gh release create $env:RELEASE_TAG dist-release/NovaBlock.exe dist-release/update.bat dist-release/NovaBlock-Outils.zip dist-release/SHA256SUMS.txt --target $env:GITHUB_SHA --title "NovaBlock $env:RELEASE_TAG - Fermeture onglet cible" --notes-file RELEASE_NOTES.md --draft
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           gh release edit $env:RELEASE_TAG --draft=false --latest
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
