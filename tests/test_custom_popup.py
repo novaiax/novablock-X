@@ -21,11 +21,11 @@ class CustomPopupTriggerTests(unittest.TestCase):
 
     def test_custom_domain_brand_in_title_triggers(self):
         m = self.make_monitor(domains=["instagram.com"])
-        self.assertEqual(m._check_title("Instagram • Photos et vidéos"), "instagram.com")
+        self.assertEqual(m._check_title("Instagram • Photos et vidéos"), "instagram")
 
     def test_custom_url_host_triggers(self):
         m = self.make_monitor(urls=["https://tiktok.com/@foo/video/123"])
-        self.assertEqual(m._check_title("TikTok - Make Your Day"), "tiktok.com")
+        self.assertEqual(m._check_title("TikTok - Make Your Day"), "tiktok")
 
     def test_unrelated_title_does_not_trigger_custom_site(self):
         m = self.make_monitor(domains=["instagram.com"])
@@ -39,7 +39,7 @@ class CustomPopupTriggerTests(unittest.TestCase):
         m = WindowMonitor(lambda *_: None, poll_interval=1.0)
         with patch("novablock.config.load", return_value={"custom_blocked_domains": ["reddit.com"], "custom_blocked_urls": []}):
             m._custom_cache_until = 0
-            self.assertEqual(m._check_title("Reddit - Dive into anything"), "reddit.com")
+            self.assertEqual(m._check_title("Reddit - Dive into anything"), "reddit")
 
 
 if __name__ == "__main__":
