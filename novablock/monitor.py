@@ -1,9 +1,13 @@
 """Fast foreground-browser monitor.
 
-Adult detection uses the page title. User-added sites are different: they are
-matched only against the browser address bar after navigation is engaged.
-Merely typing, displaying or mentioning a custom-site address must never show
-a popup.
+Adult detection uses the page title. User-added sites are matched only against
+the browser address bar after navigation is engaged: merely typing/displaying
+a custom-site address never triggers them.
+
+User-added words are intentionally different: an exact configured word/phrase
+triggers when it appears in the active browser title, the active URL, or the
+currently focused editable browser field. This catches a word while the user
+is typing it without installing a global Windows keylogger.
 """
 import logging
 import re
@@ -88,8 +92,10 @@ class WindowMonitor:
         self._custom_cache_until = 0.0
         self._custom_domains: list[str] = []
         self._custom_urls: list[str] = []
+        self._custom_words: list[str] = []
         self._browser_cache: dict[int, tuple[float, bool]] = {}
         self._address_cache: dict[int, tuple[float, str, bool]] = {}
+        self._focused_edit_cache: dict[int, tuple[float, tuple[str, ...]]] = {}
 
     def start(self) -> None:
         if not HAS_WIN32:
@@ -161,8 +167,10 @@ class WindowMonitor:
             from . import config
             domains = [self._normalize_host(v) for v in config.get_popup_domains()]
             urls = [self._normalize_url(v) for v in config.get_popup_urls()]
+            words = [" ".join(str(v).strip().lower().split()) for v in config.get_popup_words()]
             self._custom_domains = sorted({d for d in domains if d}, key=len, reverse=True)
             self._custom_urls = sorted({u for u in urls if u}, key=len, reverse=True)
+            self._custom_words = sorted({w for w in words if w}, key=len, reverse=True)
         except Exception as e:
             log.debug("custom popup config reload failed: %s", e)
 
@@ -222,14 +230,28 @@ class WindowMonitor:
         except Exception:
             return False
 
+    @staticmethod
+    def _control_values(control) -> list[str]:
+        values: list[str] = []
+        for getter in ("get_value", "window_text"):
+            try:
+                value = str(getattr(control, getter)() or "").strip()
+            except Exception:
+                continue
+            if value and value not in values:
+                values.append(value)
+        return values
+
     def _read_address_bar(self, hwnd: int) -> tuple[str, bool]:
         """Return (address_text, address_bar_has_keyboard_focus).
 
-        Matching while the bar is focused is suppressed: typing/pasting is not
-        navigation. After Enter/click navigation commits and the browser leaves
-        address editing, the same URL becomes eligible on the next ~100ms tick.
+        Site matching while the bar is focused is suppressed: typing/pasting
+        a custom-site address is not navigation. Custom WORD matching may use
+        the focused text separately, because words are explicitly meant to
+        trigger while they are typed.
         """
-        if not HAS_UIA or (not self._custom_domains and not self._custom_urls):
+        self._reload_custom_config()
+        if not HAS_UIA or not (self._custom_domains or self._custom_urls or self._custom_words):
             return "", False
         now = time.monotonic()
         cached = self._address_cache.get(hwnd)
@@ -252,14 +274,7 @@ class WindowMonitor:
                 if not self._control_is_near_browser_top(control, window):
                     continue
                 name = self._control_name(control)
-                values: list[str] = []
-                for getter in ("get_value", "window_text"):
-                    try:
-                        value = str(getattr(control, getter)() or "").strip()
-                    except Exception:
-                        continue
-                    if value and value not in values:
-                        values.append(value)
+                values = self._control_values(control)
                 url_value = next((v for v in values if self._looks_like_url(v)), "")
                 if not url_value:
                     continue
@@ -279,8 +294,78 @@ class WindowMonitor:
         self._address_cache[hwnd] = (now + 0.06, best_url, best_focused)
         return best_url, best_focused
 
+    def _read_focused_edit_texts(self, hwnd: int) -> tuple[str, ...]:
+        """Read text from the browser's currently focused editable control.
+
+        This catches words typed into the omnibox, a search field or another
+        focused input. It does not hook the keyboard globally and it does not
+        scrape arbitrary page body text.
+        """
+        self._reload_custom_config()
+        if not HAS_UIA or not self._custom_words:
+            return ()
+        now = time.monotonic()
+        cached = self._focused_edit_cache.get(hwnd)
+        if cached and now < cached[0]:
+            return cached[1]
+
+        found: list[str] = []
+        try:
+            window = Desktop(backend="uia").window(handle=hwnd)
+            for control_type in ("Edit", "ComboBox"):
+                try:
+                    controls = window.descendants(control_type=control_type)
+                except Exception:
+                    controls = []
+                for control in controls:
+                    if not self._control_has_focus(control):
+                        continue
+                    for value in self._control_values(control):
+                        if value not in found:
+                            found.append(value)
+        except Exception as e:
+            log.debug("UIA focused-edit read failed hwnd=%s: %s", hwnd, e)
+
+        result = tuple(found)
+        self._focused_edit_cache[hwnd] = (now + 0.06, result)
+        return result
+
+    @staticmethod
+    def _exact_term_pattern(term: str) -> re.Pattern[str]:
+        parts = [re.escape(part) for part in term.split() if part]
+        body = r"\s+".join(parts)
+        return re.compile(r"(?<!\w)" + body + r"(?!\w)", re.IGNORECASE)
+
+    def _match_custom_word(self, text: str) -> Optional[str]:
+        """Return an exact custom word/phrase found in text.
+
+        Boundaries prevent a rule such as `pro` from matching `professional`
+        or `programme`.
+        """
+        self._reload_custom_config()
+        if not text or not self._custom_words:
+            return None
+        for word in self._custom_words:
+            if self._exact_term_pattern(word).search(text):
+                return word
+        return None
+
+    def _match_custom_word_sources(self, hwnd: int, title: str) -> Optional[str]:
+        """Check the active title, active URL and currently typed browser text."""
+        hit = self._match_custom_word(title)
+        if hit:
+            return hit
+
+        for value in self._read_focused_edit_texts(hwnd):
+            hit = self._match_custom_word(value)
+            if hit:
+                return hit
+
+        address, _editing = self._read_address_bar(hwnd)
+        return self._match_custom_word(address)
+
     def _match_committed_custom_navigation(self, hwnd: int) -> Optional[str]:
-        """Custom popup gate: URL must match and address editing must be over."""
+        """Custom-site gate: URL must match and address editing must be over."""
         self._reload_custom_config()
         if not self._custom_domains and not self._custom_urls:
             return None
@@ -290,7 +375,7 @@ class WindowMonitor:
         return self._match_custom_url(address)
 
     def _check_title(self, title: str) -> Optional[str]:
-        """Adult-content title detection only; custom sites never use titles."""
+        """Built-in adult-content title detection only."""
         t = title.lower()
         for kw in ADULT_KEYWORDS_SUBSTRING:
             if kw in t:
@@ -317,9 +402,14 @@ class WindowMonitor:
                 title = win32gui.GetWindowText(hwnd) or ""
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 if self._is_browser(pid):
-                    hit = self._match_committed_custom_navigation(hwnd)
+                    self._reload_custom_config()
+                    hit = self._match_custom_word_sources(hwnd, title)
                     if hit:
-                        log.warning("Committed custom navigation detected: %r hwnd=%s", hit, hwnd)
+                        log.warning("Custom popup word detected: %r hwnd=%s", hit, hwnd)
+                    if not hit:
+                        hit = self._match_committed_custom_navigation(hwnd)
+                        if hit:
+                            log.warning("Committed custom navigation detected: %r hwnd=%s", hit, hwnd)
                     if not hit:
                         hit = self._check_title(title)
                     if hit:
