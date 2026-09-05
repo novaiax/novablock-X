@@ -1,44 +1,16 @@
 @echo off
-REM ============================================================
-REM NovaBlock - Update from GitHub release
-REM ============================================================
-REM Downloads the latest NovaBlock.exe from
-REM https://github.com/novaiax/novablock-X/releases/latest
-REM and replaces the running one. No Python required.
-REM
-REM For local rebuild from source (requires Python + PyInstaller),
-REM use update_local.bat instead.
-REM
-REM Usage: right-click -> Run as administrator
-REM
-REM ------ Concurrency / safety design ------
-REM Yann previously could just close the update cmd window mid-flight
-REM and the watchdog would die because update.bat used to /Delete the
-REM scheduled tasks before re-creating them. Two fixes:
-REM
-REM 1) Lock file at C:\ProgramData\NovaBlock\update.lock with a unix
-REM    timestamp. A second update.bat refuses to run if the lock is
-REM    less than 30 minutes old. If older, it is treated as stale
-REM    (previous run crashed/closed) and overwritten.
-REM
-REM 2) Scheduled tasks are NEVER /Delete'd by this script — only /End
-REM    is used to stop the running instance long enough to overwrite
-REM    the .exe. The NovaBlockWatchdog task fires every minute under
-REM    SYSTEM, so even if this script is killed mid-way the watchdog
-REM    automatically re-arms hosts/DNS/firewall at the next tick.
-REM
-REM If something goes really wrong, run unstick_sockets.bat — it
-REM clears stale locks, restarts services, and triggers the watchdog
-REM to re-apply everything immediately.
-REM ============================================================
-
 setlocal enabledelayedexpansion
 
-REM ----- Self-elevate if not admin -----
+REM ============================================================
+REM NovaBlock - Update from latest GitHub release
+REM Robust against the old exe remaining locked for a few seconds.
+REM Usage: right-click -> Run as administrator
+REM ============================================================
+
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [INFO] Re-launching as administrator...
-    powershell -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b 0
 )
 
@@ -47,10 +19,12 @@ echo NovaBlock - Update from GitHub
 echo ============================================================
 echo.
 
-REM ----- Step 0: acquire update lock -----
 set "LOCK_DIR=%PROGRAMDATA%\NovaBlock"
 set "LOCK_FILE=%LOCK_DIR%\update.lock"
+set "SENTINEL=%LOCK_DIR%\shutdown.sentinel"
 set "STALE_AFTER=1800"
+
+if not exist "%LOCK_DIR%" mkdir "%LOCK_DIR%" >nul 2>&1
 
 if exist "%LOCK_FILE%" (
     set "LOCKTS="
@@ -60,203 +34,178 @@ if exist "%LOCK_FILE%" (
     if !LOCK_AGE! lss 0 set LOCK_AGE=0
     if !LOCK_AGE! lss %STALE_AFTER% (
         echo [ERROR] Another update is already running ^(started !LOCK_AGE!s ago^).
-        echo Wait for it to finish, or if you're sure it crashed, delete:
+        echo If the previous update crashed, delete:
         echo   %LOCK_FILE%
-        echo and re-run this script. Lock auto-expires after %STALE_AFTER%s.
+        echo then re-run this updater.
         pause
         exit /b 1
     )
-    echo [INFO] Stale lock found ^(!LOCK_AGE!s old^), overwriting.
+    echo [INFO] Stale update lock found; replacing it.
 )
-
-if not exist "%LOCK_DIR%" mkdir "%LOCK_DIR%" >nul 2>&1
 for /f %%n in ('powershell -NoProfile -Command "[int]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"') do set ACQUIRE_TS=%%n
 > "%LOCK_FILE%" echo !ACQUIRE_TS!
 
-REM ----- Step 1: locate the installed NovaBlock.exe -----
+REM ----- Step 1: locate installed exe -----
 echo [1/7] Locating current NovaBlock installation...
 set "INSTALL_PATH="
-for /f "tokens=2,*" %%a in ('reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v NovaBlock 2^>nul ^| findstr /R "NovaBlock"') do (
-    set "INSTALL_PATH=%%b"
-)
-REM Strip surrounding quotes if present
+for /f "tokens=2,*" %%a in ('reg query "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" /v NovaBlock 2^>nul ^| findstr /R "NovaBlock"') do set "INSTALL_PATH=%%b"
 set "INSTALL_PATH=%INSTALL_PATH:"=%"
-
 if "%INSTALL_PATH%"=="" (
-    REM Fallback: assume next to this script in dist\
     set "INSTALL_PATH=%~dp0dist\NovaBlock.exe"
-    echo   [WARN] HKLM\Run\NovaBlock not found, using fallback path:
+    echo   [WARN] Registry path missing, using fallback path.
 )
 echo   Found at: %INSTALL_PATH%
-
-REM Get the install directory (without filename)
 for %%i in ("%INSTALL_PATH%") do set "INSTALL_DIR=%%~dpi"
 
-REM ----- Step 2: download to a temp file (NovaBlock still running) -----
+REM ----- Step 2: download while old app still runs -----
 echo [2/7] Downloading latest NovaBlock.exe from GitHub...
 set "DOWNLOAD_URL=https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe"
 set "TMP_FILE=%INSTALL_PATH%.tmp"
+if exist "%TMP_FILE%" del /F /Q "%TMP_FILE%" >nul 2>&1
 
-REM Try curl first (built-in on Windows 10 1803+); fall back to PowerShell
 curl --version >nul 2>&1
 if %errorlevel% equ 0 (
     curl -L -f --progress-bar -o "%TMP_FILE%" "%DOWNLOAD_URL%"
     set "DL_RESULT=!errorlevel!"
 ) else (
-    powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol = 'Tls12'; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TMP_FILE%' -UseBasicParsing } catch { exit 1 }"
+    powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TMP_FILE%' -UseBasicParsing } catch { exit 1 }"
     set "DL_RESULT=!errorlevel!"
 )
-
-if not !DL_RESULT! equ 0 (
-    echo   [ERROR] Download failed. Check your internet connection.
-    if exist "%TMP_FILE%" del "%TMP_FILE%" >nul 2>&1
-    goto :cleanup_fail
-)
-
-REM Sanity check: file must exist and be at least 5 MB
+if not !DL_RESULT! equ 0 goto :download_failed
 for %%A in ("%TMP_FILE%") do set "DL_SIZE=%%~zA"
-if not defined DL_SIZE (
-    echo   [ERROR] Downloaded file missing.
-    goto :cleanup_fail
-)
-if %DL_SIZE% lss 5000000 (
-    echo   [ERROR] Downloaded file too small ^(%DL_SIZE% bytes^). Probably HTML error page.
-    del "%TMP_FILE%" >nul 2>&1
-    goto :cleanup_fail
-)
-echo   Downloaded %DL_SIZE% bytes OK.
+if not defined DL_SIZE goto :download_failed
+if !DL_SIZE! lss 5000000 goto :download_failed
+echo   Downloaded !DL_SIZE! bytes OK.
 
-REM ----- Step 3: stop running instance (do NOT delete the tasks!) -----
-REM v1.0.15+ hardens the process against TerminateProcess via a deny-ACE
-REM on PROCESS_TERMINATE, so plain taskkill returns Access Denied. Drop
-REM the shutdown sentinel first: the main app and companion both poll
-REM this file every second and exit themselves when it appears (an
-REM internal sys.exit, which is NOT blocked by the kill ACL). We give
-REM them 6 seconds to notice, then fall back to taskkill for older
-REM versions that don't know about the sentinel yet.
-echo [3/7] Stopping NovaBlock to free the exe ^(scheduled tasks kept^)...
+REM ----- Step 3: stop ALL NovaBlock processes, then VERIFY -----
+echo [3/7] Stopping NovaBlock and waiting for file handles to close...
 schtasks /End /TN NovaBlockWatchdog >nul 2>&1
 schtasks /End /TN NovaBlockApp >nul 2>&1
-REM Drop sentinel for v1.0.15+ to self-exit
-if not exist "%LOCK_DIR%" mkdir "%LOCK_DIR%" >nul 2>&1
-> "%LOCK_DIR%\shutdown.sentinel" echo update.bat
-timeout /t 6 /nobreak >nul
-REM Fallback: taskkill for older versions or stragglers
-taskkill /F /IM NovaBlock.exe >nul 2>&1
+> "%SENTINEL%" echo update.bat
+
+REM Give main + companion time to observe the sentinel and self-exit.
+set /a STOP_WAITED=0
+:wait_process_exit
+tasklist /FI "IMAGENAME eq NovaBlock.exe" /NH 2>nul | find /I "NovaBlock.exe" >nul
+if errorlevel 1 goto :processes_gone
+
+REM Fallback for old versions / a stuck process. This may be denied by the
+REM process DACL; the sentinel remains the primary shutdown mechanism.
+taskkill /F /T /IM NovaBlock.exe >nul 2>&1
+powershell -NoProfile -Command "Get-Process NovaBlock -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue" >nul 2>&1
+
+timeout /t 1 /nobreak >nul
+set /a STOP_WAITED+=1
+if !STOP_WAITED! lss 35 goto :wait_process_exit
+
+:process_still_running
+echo   [ERROR] NovaBlock.exe is still running after !STOP_WAITED! seconds.
+echo   Windows is still holding the executable open, so replacing it would fail.
+echo   Update aborted safely; the old version will be allowed to restart.
+goto :cleanup_fail
+
+:processes_gone
+echo   [OK] All NovaBlock.exe processes exited.
+REM Windows can retain the image section briefly after process exit.
 timeout /t 2 /nobreak >nul
 
-REM ----- Step 4: ensure hosts ACL is writable -----
+REM ----- Step 4: hosts ACL -----
 echo [4/7] Unlocking hosts file ACL...
 takeown /f C:\Windows\System32\drivers\etc\hosts >nul 2>&1
-REM Use the well-known SID, NOT the group name. On a non-English Windows the
-REM built-in group is called Administrateurs / Administratoren / etc, so
-REM "/grant Administrators:F" fails with "No mapping between account names
-REM and security IDs was done" - silently, since errors are sent to nul.
-REM S-1-5-32-544 is the Administrators SID on every locale.
 icacls C:\Windows\System32\drivers\etc\hosts /grant *S-1-5-32-544:F >nul 2>&1
 
-REM ----- Step 5: swap exe -----
+REM ----- Step 5: replace exe with retries -----
 echo [5/7] Installing new version...
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%" >nul 2>&1
-move /Y "%TMP_FILE%" "%INSTALL_PATH%" >nul
-if %errorlevel% neq 0 (
-    echo   [ERROR] Could not replace %INSTALL_PATH%. Is the file locked?
-    echo   The watchdog scheduled task is still in place — it will restart
-    echo   NovaBlock from the OLD exe within 60 seconds. You can re-run
-    echo   update.bat after fixing the issue.
-    goto :cleanup_fail
+set /a MOVE_TRY=0
+:retry_move
+set /a MOVE_TRY+=1
+move /Y "%TMP_FILE%" "%INSTALL_PATH%" >nul 2>&1
+if !errorlevel! equ 0 goto :move_ok
+
+if !MOVE_TRY! lss 12 (
+    echo   File still busy; retry !MOVE_TRY!/12...
+    REM Re-check no NovaBlock process came back while the sentinel is active.
+    schtasks /End /TN NovaBlockWatchdog >nul 2>&1
+    schtasks /End /TN NovaBlockApp >nul 2>&1
+    taskkill /F /T /IM NovaBlock.exe >nul 2>&1
+    timeout /t 1 /nobreak >nul
+    goto :retry_move
 )
 
-REM ----- Step 6: relaunch + verify -----
-echo [6/7] Re-launching NovaBlock and verifying it comes up...
-REM Remove sentinel so the new instance doesn't self-exit on startup.
-REM (Belt-and-braces: start_companion_supervision() also clears it.)
-del "%LOCK_DIR%\shutdown.sentinel" >nul 2>&1
+echo   [ERROR] Could not replace %INSTALL_PATH% after !MOVE_TRY! attempts.
+echo   The executable is still locked by Windows or another process.
+goto :cleanup_fail
+
+:move_ok
+echo   [OK] New executable installed.
+
+REM ----- Step 6: relaunch -----
+echo [6/7] Re-launching NovaBlock and verifying startup...
+del "%SENTINEL%" >nul 2>&1
 start "" "%INSTALL_PATH%"
 
-REM Wait up to 30s for the new app to write a fresh heartbeat.
-REM The in-process watchdog touches it every 30s.
 set "HEARTBEAT=%LOCK_DIR%\watchdog.heartbeat"
 set /a WAITED=0
 :wait_heartbeat
 timeout /t 3 /nobreak >nul
-set /a WAITED=WAITED+3
-if not exist "%HEARTBEAT%" (
-    if !WAITED! lss 30 goto wait_heartbeat
-    echo   [WARN] No heartbeat file after !WAITED!s — new exe may not have started.
-    echo   The NovaBlockWatchdog scheduled task will retry every minute.
-    goto :cleanup_ok
-)
-
+set /a WAITED+=3
 for /f %%h in ('powershell -NoProfile -Command "$h=Get-Content '%HEARTBEAT%' -ErrorAction SilentlyContinue; if($h){[int]$h}else{0}"') do set HEART_TS=%%h
 for /f %%n in ('powershell -NoProfile -Command "[int]([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"') do set NOWTS=%%n
-set /a HEART_AGE=NOWTS-HEART_TS
-if !HEART_AGE! gtr 60 (
-    if !WAITED! lss 30 goto wait_heartbeat
-    echo   [WARN] Heartbeat is !HEART_AGE!s old — new app may not be ticking.
-) else (
-    echo   [OK] New NovaBlock is alive ^(heartbeat !HEART_AGE!s old^).
-)
+set /a HEART_AGE=NOWTS-HEART_TS 2>nul
+if defined HEART_TS if !HEART_AGE! leq 60 goto :heartbeat_ok
+if !WAITED! lss 36 goto :wait_heartbeat
+echo   [WARN] Fresh heartbeat not seen yet. Scheduled recovery will retry if needed.
+goto :cleanup_ok
+
+:heartbeat_ok
+echo   [OK] NovaBlock is alive ^(heartbeat !HEART_AGE!s old^).
 
 :cleanup_ok
 del "%LOCK_FILE%" >nul 2>&1
 
-REM ----- Step 7: health check -----
 echo.
-echo [7/7] Verification de l'etat du systeme...
+echo [7/7] Quick health check...
 set /a HEALTH=0
-
 for /f %%d in ('powershell -NoProfile -Command "$sw=[Diagnostics.Stopwatch]::StartNew(); try{[System.Net.Dns]::GetHostAddresses('www.google.com')^|Out-Null; $sw.Stop(); [int]$sw.Elapsed.TotalMilliseconds}catch{$sw.Stop(); -1}"') do set DNSMS=%%d
 if !DNSMS! lss 0 (
-    echo   [PROBLEME] La resolution DNS echoue.
+    echo   [PROBLEM] DNS resolution failed.
     set /a HEALTH+=1
 ) else (
-    if !DNSMS! gtr 2000 (
-        echo   [PROBLEME] Resolution DNS tres lente : !DNSMS! ms.
-        set /a HEALTH+=1
-    ) else (
-        echo   [OK] Resolution DNS : !DNSMS! ms
-    )
+    echo   [OK] DNS resolution: !DNSMS! ms
 )
-
 schtasks /Query /TN NovaBlockWatchdog >nul 2>&1
-if !errorlevel! neq 0 (
-    echo   [PROBLEME] Tache planifiee NovaBlockWatchdog absente.
+if errorlevel 1 (
+    echo   [PROBLEM] NovaBlockWatchdog task missing.
     set /a HEALTH+=1
-) else (
-    echo   [OK] Tache planifiee presente
-)
+) else echo   [OK] Scheduled watchdog present
 
-tasklist /FI "IMAGENAME eq NovaBlock.exe" 2>nul | find /I "NovaBlock.exe" >nul
-if !errorlevel! neq 0 (
-    echo   [PROBLEME] NovaBlock.exe ne tourne pas.
-    set /a HEALTH+=1
-) else (
-    echo   [OK] NovaBlock tourne
-)
+tasklist /FI "IMAGENAME eq NovaBlock.exe" /NH 2>nul | find /I "NovaBlock.exe" >nul
+if errorlevel 1 (
+    echo   [WARN] NovaBlock process not visible yet; watchdog will retry.
+) else echo   [OK] NovaBlock is running
 
-if !HEALTH! gtr 0 (
-    echo.
-    echo   !HEALTH! probleme^(s^) detecte^(s^).
-    echo   Lance unstick_sockets.bat en administrateur.
-)
 echo.
 echo ============================================================
-echo Update complete. NovaBlock re-launched.
-echo Your config ^(encrypted in C:\ProgramData\NovaBlock^) is preserved.
+echo Update complete. Configuration in C:\ProgramData\NovaBlock was preserved.
 echo ============================================================
 timeout /t 3 /nobreak >nul
 exit /b 0
 
+:download_failed
+echo   [ERROR] Download failed or downloaded file is invalid.
+if exist "%TMP_FILE%" del /F /Q "%TMP_FILE%" >nul 2>&1
+goto :cleanup_fail
+
 :cleanup_fail
 del "%LOCK_FILE%" >nul 2>&1
-REM Clear sentinel so the existing (un-updated) NovaBlock can restart
-del "%LOCK_DIR%\shutdown.sentinel" >nul 2>&1
+del "%SENTINEL%" >nul 2>&1
+REM Re-arm the existing installation after a failed update.
+schtasks /Run /TN NovaBlockApp >nul 2>&1
+schtasks /Run /TN NovaBlockWatchdog >nul 2>&1
 echo.
 echo ============================================================
-echo Update FAILED. NovaBlock's scheduled task is still in place
-echo and will keep enforcing the block from the previous .exe.
-echo If something seems off, run unstick_sockets.bat as admin.
+echo Update FAILED safely. The previous NovaBlock installation was re-armed.
 echo ============================================================
 pause
 exit /b 1
