@@ -1,27 +1,25 @@
-## NovaBlock v1.0.28 : reprise après arrêt du processus
+## NovaBlock v1.0.29 : popup instantané pour les sites personnels
 
-### Installation de la mise à jour
+### Installation
 
-Télécharger `update.bat` dans les fichiers de cette release, puis l'exécuter en administrateur. Il télécharge le nouveau `NovaBlock.exe`, remplace l'exécutable installé et relance l'application. La configuration existante dans `C:\ProgramData\NovaBlock` est conservée. Il n'est pas nécessaire de refaire l'assistant d'installation.
+Télécharger `update.bat` dans cette release puis l'exécuter en administrateur. Il remplace le `NovaBlock.exe` installé et conserve la configuration existante.
 
-### Correctifs
+### Nouveau comportement
 
-- Le watchdog SYSTEM ne se limite plus à réparer les filtres : lorsque le programme principal est absent, il demande sa relance via la tâche `NovaBlockApp`, dans la session interactive de l'utilisateur. La cadence de secours reste d'une minute, à laquelle s'ajoutent l'exécution du contrôle et le démarrage Windows. Ce n'est pas une garantie de délai maximal.
-- La reprise fonctionne également lorsque les filtres sont déjà intacts ou qu'un déblocage temporaire autorisé est en cours.
-- Chaque relance du compagnon ou du programme principal utilise un environnement PyInstaller indépendant. Les ressources temporaires de l'ancien processus ne sont plus partagées avec son remplaçant.
-- Les signatures Win32 de manipulation des mutex utilisent des HANDLE complets, notamment sur Windows 64 bits. Les sondes referment leurs handles.
-- La règle de refus de terminaison du processus est placée avant les règles d'autorisation existantes. Cela reste une protection discrétionnaire : un administrateur privilégié peut la contourner. La relance est donc nécessaire indépendamment de cette protection.
-- Les tâches planifiées sont actualisées sans suppression préalable. Les échecs d'enregistrement sont journalisés.
-- Les relances respectent les mises à jour et la désinstallation avec code. Les marqueurs de maintenance expirent pour éviter qu'une mise à jour interrompue ne suspende la reprise indéfiniment.
+- Les domaines et URLs ajoutés manuellement dans NovaBlock sont maintenant lus directement par le monitor de fenêtres.
+- Dès qu'un site personnel apparaît dans le titre du navigateur, NovaBlock déclenche le même popup plein écran que pour un contenu adulte.
+- Le monitor vérifie la fenêtre active environ toutes les 100 ms. L'objectif est un popup perceptuellement instantané après l'apparition du titre dans le navigateur.
+- Les nouveaux sites ajoutés sont rechargés depuis la configuration sans nécessiter de redémarrer NovaBlock.
+- Les entrées existantes sont conservées à travers les mises à jour car elles restent stockées dans `config.dat`.
+
+### Remarque technique
+
+Le déclenchement repose sur le titre de la fenêtre du navigateur. Il est donc quasi instantané une fois que le navigateur a affiché un titre correspondant au site, mais ce n'est pas une interception réseau avant chargement.
 
 ### Inchangé
 
-Aucune modification des listes de blocage, des destinataires, des règles d'envoi de mails, du déblocage avec code ou du délai de désinstallation. Aucun nouvel email n'est déclenché par la récupération d'un processus arrêté.
+Aucun nouvel email n'est envoyé. Le système de code, la rotation, le cooldown de désinstallation, les filtres adultes, le watchdog et la relance automatique restent inchangés.
 
-### Vérification de cette release
+### Validation
 
-Le workflow Windows doit réussir les tests de régression, compiler l'exécutable puis exécuter son autotest natif avant de publier les fichiers. L'autotest vérifie les dépendances Windows, les mutex, l'ordre des permissions et la création d'une instance compilée indépendante. Il n'installe pas le bloqueur et n'envoie aucun email.
-
-Le scénario complet Gestionnaire des tâches / session interactive doit encore être confirmé sur le PC installé : les tests automatisés ne reproduisent pas sa configuration Windows exacte.
-
-`SHA256SUMS.txt` contient l'empreinte du nouvel exécutable. Aucun identifiant Resend n'est incorporé à la version publique.
+La release est compilée sur Windows après exécution de tous les tests `test_*.py`, puis le véritable `NovaBlock.exe` passe l'autotest runtime avant publication.
