@@ -1,207 +1,353 @@
 # NovaBlock
 
-Bloqueur de contenu adulte pour Windows, avec un ami comme garde-fou.
+NovaBlock est un bloqueur de contenu adulte pour Windows avec un système d’accountability partner.
 
-Le déblocage exige un code de 25 caractères que **tu ne vois jamais**. Seul l'ami que tu as désigné le reçoit par email. Tu dois le lui demander.
+L’objectif est simple : rendre l’accès impulsif au contenu adulte suffisamment difficile pour que la décision ne repose pas uniquement sur la volonté du moment.
+
+Le déblocage temporaire utilise un code de 25 caractères. Le code en clair n’est pas affiché à l’utilisateur : il est envoyé à l’ami de confiance configuré dans NovaBlock.
+
+> Version actuelle : **v1.0.33**
 
 ---
 
-## Téléchargement direct
+## Téléchargement
 
-Tous les fichiers ci-dessous se téléchargent en un clic, sans cloner le dépôt.
-
-| Je veux… | Fichier | Télécharger |
+| Besoin | Fichier | Lien |
 |---|---|---|
-| **Installer NovaBlock** | `NovaBlock.exe` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe) |
-| **Tous les outils de secours** | `NovaBlock-Outils.zip` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip) |
-| **Mettre à jour seulement** | `update.bat` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat) |
-| **Réparer un démarrage lent** | `REPARE_INTERNET.ps1` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/REPARE_INTERNET.ps1) |
-| **Mesurer le démarrage** | `MESURE_BOOT.ps1` | [Télécharger](https://github.com/novaiax/novablock-X/releases/latest/download/MESURE_BOOT.ps1) |
+| Installer NovaBlock | `NovaBlock.exe` | [Télécharger la dernière version](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe) |
+| Mettre NovaBlock à jour | `update.bat` | [Télécharger l’updater](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat) |
+| Outils de récupération | `NovaBlock-Outils.zip` | [Télécharger les outils](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip) |
+| Vérifier le binaire | `SHA256SUMS.txt` | [Télécharger le checksum](https://github.com/novaiax/novablock-X/releases/latest/download/SHA256SUMS.txt) |
 
-Le ZIP contient `EMERGENCY_RESET`, `REACTIVATE`, `unstick_sockets`, `whitelist_site`, plus les trois outils ci-dessus.
-
-> **Pourquoi ces quatre-là ne sont pas téléchargeables séparément :** chacun est une paire `.bat` + `.ps1`. Le `.bat` appelle le `.ps1` du même nom **placé juste à côté de lui** ; séparés, ils ne font rien. Les proposer à l'unité revenait à distribuer des fichiers morts, donc ils ne sont plus servis que par le ZIP.
-
-### Le plus simple : tout d'un coup
-
-**[Télécharger NovaBlock-Outils.zip](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip)** — tous les outils de secours, prêts à l'emploi.
-
-> **Pourquoi le ZIP est recommandé :** chaque `.bat` appelle le `.ps1` du même nom **placé juste à côté de lui**. Si tu télécharges `EMERGENCY_RESET.bat` sans `EMERGENCY_RESET.ps1`, il ne fera rien. Le ZIP contient déjà les paires complètes.
-
-Garde-le décompressé quelque part d'accessible — le jour où tu en auras besoin, tu n'auras peut-être plus internet.
-
-Tous les `.bat` se lancent par **double-clic** et demandent les droits administrateur tout seuls.
+Les releases officielles sont compilées sur Windows par GitHub Actions, testées, puis soumises à un autotest du binaire avant publication.
 
 ---
 
-## 1. Installer
+## Installation
 
-1. Télécharge **[NovaBlock.exe](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe)**
-2. Double-clique, accepte l'élévation administrateur
-3. Suis le wizard :
-   - Crée un compte gratuit sur [resend.com](https://resend.com) (3000 emails/mois)
-   - Copie ta clé API depuis [resend.com/api-keys](https://resend.com/api-keys)
-   - Saisis l'email de ton ami
+1. Télécharge `NovaBlock.exe` depuis la dernière release.
+2. Lance l’exécutable et accepte l’élévation administrateur.
+3. Suis l’assistant d’installation.
+4. Configure :
+   - ton prénom ;
+   - le prénom de ton ami de confiance ;
+   - son adresse email ;
+   - une clé API Resend ;
+   - l’adresse d’expédition utilisée par Resend.
+5. NovaBlock génère le code initial et l’envoie à ton ami.
 
-C'est fini. L'icône bouclier apparaît dans la barre des tâches et le blocage est actif.
+Une fois l’installation terminée, NovaBlock reste actif en arrière-plan et son icône apparaît dans la zone de notification Windows.
 
----
+La configuration est stockée localement dans :
 
-## 2. Mettre à jour
-
-**Double-clic sur `update.bat`.**
-
-Il télécharge le dernier `NovaBlock.exe` depuis GitHub et remplace l'ancien. Pas besoin de Python, ni d'être dans le dossier du projet : il retrouve seul l'endroit où NovaBlock est installé, en lisant le registre.
-
-À la fin, il vérifie que tout fonctionne — résolution DNS, tâche planifiée, processus actif — et te dit quoi lancer s'il détecte un problème.
-
-Ta configuration est conservée : elle est chiffrée dans `C:\ProgramData\NovaBlock\config.dat`.
-
-> Si tu as modifié le code toi-même, recompile avec `build.bat` (Python requis), puis relance `dist\NovaBlock.exe`.
-
----
-
-## 3. EMERGENCY RESET — quand plus rien ne marche
-
-À utiliser si : plus d'internet, les navigateurs tournent en boucle, NovaBlock est coincé, `update.bat` échoue.
-
-**Double-clic sur `EMERGENCY_RESET.bat`** (avec `EMERGENCY_RESET.ps1` dans le même dossier).
-
-### Horaires : ferme de 19h00 à 06h00
-
-**EMERGENCY_RESET refuse de s'ouvrir entre 19h00 et 06h00, heure de Paris.** Un écran de blocage s'affiche à la place, avec le décompte jusqu'à la réouverture.
-
-C'est la nuit que l'envie de tout couper est la plus forte, et c'est justement à ce moment que l'outil était le plus facile à atteindre.
-
-L'heure du PC n'est **jamais** consultée : la changer, ainsi que la date ou le fuseau horaire, ne produit aucun effet. Elle vient du réseau, par deux sources indépendantes qui se recoupent :
-
-1. `timeapi.io`, qui renvoie l'heure de Paris avec le passage à l'heure d'été
-2. l'en-tête `Date` HTTP de serveurs majeurs, en GMT, converti vers Paris
-
-> **Sans réseau, l'accès est refusé.** Couper internet verrouille l'outil au lieu de le libérer. Conséquence à connaître : si tu perds internet pendant la nuit, tu n'auras pas accès à EMERGENCY_RESET avant 06h00.
-
-La vérification tourne aussi **pendant** l'utilisation : si 19h00 arrive alors que la fenêtre est ouverte, elle se ferme. En revanche, un reset déjà lancé va toujours jusqu'au bout.
-
-En dehors de cette plage, l'outil fonctionne normalement — après le code de 30 caractères ci-dessous.
-
-### Le code de 30 caractères
-
-Une fenêtre s'ouvre et affiche un **code aléatoire de 30 caractères**, régénéré à chaque lancement : minuscules, majuscules, chiffres et symboles.
-
-**Il faut le retaper à la main, caractère par caractère.** Le copier-coller est désactivé : raccourcis clavier, menu contextuel, glisser-déposer, et le code affiché n'est pas sélectionnable.
-
-Le bouton **Lancer EMERGENCY_RESET** reste gris tant que la saisie n'est pas exacte. Une seule erreur suffit à le bloquer, et sa position t'est indiquée. La casse compte.
-
-C'est volontaire. Un reset ne doit jamais partir sur un coup de tête : le temps de recopier 30 caractères, l'envie impulsive est souvent passée. En cas de vrai problème technique, ça ne coûte qu'une minute.
-
-Une fois lancé, le **journal s'affiche en direct** dans la fenêtre, puis le résultat final. Compte une dizaine de secondes d'exécution.
-
-Ce code n'a **rien à voir** avec celui de 25 caractères détenu par Cyril : il est affiché à l'écran et ne demande l'accord de personne. Il ralentit, il n'autorise pas.
-
-Si tu n'as rien sous la main, ouvre un **PowerShell administrateur** (Win+X puis Terminal administrateur) et colle :
-
-```powershell
-iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/outils/EMERGENCY_RESET.ps1)
+```text
+C:\ProgramData\NovaBlock\config.dat
 ```
 
-Ce que ça fait :
+Les données sensibles de configuration sont chiffrées pour la machine locale.
 
-- Arrête NovaBlock et ses tâches planifiées (sans le code 25 caractères)
-- Supprime les règles pare-feu `NovaBlock_DoH_*`
-- Désactive le pare-feu Windows (temporairement)
-- Remet le DNS en automatique sur toutes les interfaces
-- Vide le bloc NovaBlock du fichier hosts
-- Retire les politiques navigateur
-- Ferme tous les navigateurs, vide les caches DNS et ARP
+---
 
-**Après ça, NovaBlock est complètement désactivé.**
+## Deux systèmes distincts
 
-### Réactiver ensuite
+NovaBlock sépare volontairement deux usages :
 
-**Double-clic sur `REACTIVATE.bat`.** Il rallume le pare-feu, réactive les tâches planifiées et relance NovaBlock, qui réapplique tout.
+1. **le contenu adulte**, protégé par plusieurs couches système ;
+2. **les sites personnels**, qui utilisent un popup après navigation réelle.
 
-Ou à distance :
+Cette séparation évite de transformer un simple site de distraction en problème DNS ou réseau.
 
-```powershell
-iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/outils/REACTIVATE.ps1)
+---
+
+## 1. Protection du contenu adulte
+
+NovaBlock ne repose pas sur une seule technique.
+
+### DNS
+
+NovaBlock configure les interfaces réseau vers une liste de résolveurs approuvés et maintient cette configuration via son watchdog.
+
+Plusieurs fournisseurs sont prévus dans le code afin de conserver une résolution DNS fonctionnelle lorsqu’un fournisseur n’est pas joignable.
+
+### Domaines adultes connus
+
+NovaBlock utilise une liste de domaines adultes issue de la blocklist `porn-only` de StevenBlack, complétée par une liste interne de domaines majeurs et de domaines explicitement surveillés.
+
+Parmi les domaines couverts par les fallbacks internes figurent notamment les principaux sites pornographiques généralistes.
+
+### SafeSearch
+
+NovaBlock applique également des règles de recherche protégée pour les moteurs pris en charge, notamment Google et Bing.
+
+### Navigateurs
+
+Des politiques Windows sont appliquées aux navigateurs compatibles afin de limiter les voies de contournement :
+
+- désactivation du DNS chiffré géré par le navigateur ;
+- désactivation de la navigation privée lorsque le navigateur le permet ;
+- règles spécifiques pour certains contenus NSFW, notamment Reddit sur les navigateurs Chromium.
+
+Navigateurs principalement pris en charge :
+
+- Chrome ;
+- Edge ;
+- Brave ;
+- Firefox ;
+- Opera ;
+- Vivaldi.
+
+### Pare-feu
+
+NovaBlock ajoute des règles de pare-feu liées aux endpoints DNS chiffrés connus afin d’éviter qu’un navigateur contourne simplement la configuration DNS système.
+
+### Monitor de contenu adulte
+
+Un monitor observe la fenêtre active du navigateur.
+
+Si le titre de la page contient un mot-clé adulte reconnu, NovaBlock peut afficher le popup plein écran même si le domaine lui-même n’était pas déjà connu.
+
+Cette couche sert de filet de sécurité pour du contenu adulte hébergé ailleurs que sur les gros domaines classiques.
+
+---
+
+## 2. Sites personnels surveillés
+
+Les sites personnels fonctionnent différemment depuis la v1.0.32.
+
+Ils sont **popup-only**.
+
+Cela signifie qu’un site ajouté dans `Sites personnels surveillés pour popup` n’est pas ajouté au DNS, au fichier hosts ou à la URLBlocklist du navigateur.
+
+### Ce qui ne déclenche PAS le popup
+
+NovaBlock ne déclenche rien simplement parce que :
+
+- tu tapes l’adresse dans la barre d’adresse ;
+- tu colles une URL ;
+- le nom du site apparaît dans une page ;
+- l’adresse apparaît dans un résultat de recherche ;
+- le nom du site apparaît dans le titre d’un autre onglet ;
+- un fragment banal du domaine apparaît dans du texte.
+
+### Ce qui déclenche le popup
+
+Le popup apparaît lorsque la navigation vers le site surveillé est réellement engagée.
+
+NovaBlock lit l’adresse active du navigateur via Windows UI Automation et effectue un contrôle environ toutes les 100 ms lorsque cette détection est disponible.
+
+Exemple :
+
+```text
+taper instagram.com
+→ aucun popup
+
+appuyer sur Entrée
+→ navigation engagée
+→ popup NovaBlock
 ```
 
----
+### Fermer l’onglet déclencheur
 
-## 4. Les autres outils
+Depuis la v1.0.33, le popup mémorise la fenêtre du navigateur qui a provoqué le déclenchement.
 
-| Fichier | À quoi ça sert |
-|---|---|
-| `unstick_sockets.bat` | Répare les navigateurs qui ne chargent plus rien alors que la connexion marche |
-| `whitelist_site.bat` | Débloque un site légitime mal classé comme adulte par le DNS familial |
-| `MESURE_BOOT.ps1` | Mesure le temps entre le démarrage du PC et l'accès à internet |
-| `build.bat` | Compile le `.exe` depuis les sources (nécessite Python) |
+Quand tu cliques sur **« Fermer l’onglet »** :
 
----
+1. NovaBlock masque le popup ;
+2. redonne le focus à la fenêtre navigateur concernée ;
+3. envoie un seul `Ctrl+F4` ;
+4. ferme ensuite le popup.
 
-## Comment ça marche
+Le but est de fermer **uniquement l’onglet qui a déclenché NovaBlock**.
 
-**À l'installation**
+NovaBlock ne tue plus tout le processus Chrome, Edge ou Firefox si cette fermeture échoue.
 
-- Un code de 25 caractères est généré au hasard
-- Seule son empreinte argon2id est stockée sur le PC, chiffrée
-- Le code en clair part par email chez ton ami
-- Tu ne le vois jamais
+### Ajouter et retirer un site personnel
 
-**En permanence**
+Depuis l’interface principale :
 
-- **DNS** forcé sur Cloudflare Family (`1.1.1.3`) sur toutes les interfaces
-- **Fichier hosts** : environ 76 800 domaines adultes redirigés vers `0.0.0.0`
-- **Navigateurs** : DNS chiffré et navigation privée désactivés (Chrome, Edge, Firefox, Brave, Opera)
-- **Pare-feu** : les serveurs DNS chiffrés connus sont bloqués, pour empêcher de contourner le filtre
-- **Surveillance** : si le titre de la fenêtre active contient un mot-clé adulte, l'onglet est fermé
-- **Tâche planifiée** : relance NovaBlock chaque minute s'il est tué
+- **Ajouter un site popup** : aucun code requis ;
+- **Retirer un site popup** : code de l’ami requis.
 
-**Pour débloquer 24 heures**
+Il est possible de surveiller :
 
-Clique sur "Demander le code à mon ami". Un nouveau code est généré et envoyé, avec le contexte de ta demande. S'il te le donne, tu le saisis et le blocage tombe pour 24 heures.
+- un domaine complet ;
+- une URL précise.
 
-**Rotation**
-
-Tous les 7 jours le code est invalidé sans prévenir personne. La demande suivante en génère un nouveau.
-
-**Pour désinstaller**
-
-Bouton "Désinstaller", puis 7 jours d'attente obligatoires, puis le code. Annulable à tout moment.
+`movix.cash` est explicitement exclu de cette liste afin d’éviter un faux positif connu.
 
 ---
 
-## Bloquer d'autres sites
+## Interface principale
 
-- **"Bloquer un site"** : immédiat, aucun code demandé. C'est fait exprès, se bloquer doit être facile.
-- **"Retirer un site bloqué"** : code requis. Se débloquer doit être difficile.
+L’interface actuelle utilise une taille fixe et compacte.
+
+Elle affiche notamment :
+
+- l’état du filtre ;
+- le temps écoulé depuis l’installation ;
+- les demandes de déblocage ;
+- la prochaine rotation du code ;
+- l’état éventuel du cooldown de désinstallation ;
+- la liste exacte des sites personnels surveillés ;
+- le nombre de règles popup actives.
+
+La fenêtre principale reste à une taille stable : **620 × 700** avant adaptation DPI par Windows.
+
+Elle ne grandit plus au fil des refresh.
 
 ---
 
-## Ce que NovaBlock ne fait pas
+## Déblocage temporaire de 24 heures
 
-C'est un outil d'auto-discipline, pas une forteresse. Quelqu'un de déterminé peut démarrer en mode sans échec, passer par une clé USB Linux, ou modifier le binaire.
+Le bouton **« Demander le code à mon ami »** déclenche une demande explicite.
 
-Le but est de rendre le contournement assez pénible pour qu'un moment de faiblesse passe. Pas d'arrêter un attaquant motivé.
+NovaBlock :
+
+1. génère un nouveau code ;
+2. remplace l’ancien hash stocké ;
+3. envoie le nouveau code à l’ami configuré ;
+4. attend que l’utilisateur saisisse ce code.
+
+Si le code est valide, le filtre peut être désactivé temporairement pendant 24 heures.
+
+Un popup de blocage ordinaire **n’envoie pas automatiquement d’email**.
 
 ---
 
-## Pour les développeurs
+## Rotation du code
+
+Le code a une durée de rotation configurée à 7 jours.
+
+La rotation est silencieuse : elle ne provoque pas d’email à elle seule.
+
+Lors de la prochaine demande explicite de déblocage, NovaBlock génère et envoie un code frais.
+
+---
+
+## Désinstallation
+
+La désinstallation normale suit volontairement un processus lent :
+
+1. lancer la demande depuis l’interface ;
+2. attendre le cooldown de 7 jours ;
+3. saisir le code détenu par l’ami de confiance ;
+4. finaliser la désinstallation.
+
+Le cooldown peut être annulé depuis l’interface avant son terme.
+
+---
+
+## Watchdog et relance automatique
+
+NovaBlock utilise plusieurs mécanismes de persistance et de récupération.
+
+Le système comprend notamment :
+
+- une instance principale ;
+- un processus compagnon ;
+- une tâche planifiée watchdog ;
+- une tâche interactive permettant de relancer l’interface dans la session utilisateur ;
+- une heartbeat permettant de détecter une instance qui ne répond plus normalement.
+
+Si le processus principal est fermé de manière inattendue, le système tente de relancer NovaBlock automatiquement.
+
+Le but n’est pas de rendre le processus techniquement impossible à terminer, mais de rendre une fermeture ponctuelle non suffisante pour neutraliser durablement le blocage.
+
+---
+
+## Mise à jour
+
+Télécharge puis lance :
+
+```text
+update.bat
+```
+
+L’updater :
+
+- retrouve l’installation existante ;
+- télécharge la dernière release ;
+- demande proprement l’arrêt des processus NovaBlock ;
+- vérifie qu’ils sont réellement arrêtés ;
+- attend que Windows libère l’ancien `.exe` ;
+- retente le remplacement si le fichier reste momentanément verrouillé ;
+- relance NovaBlock ;
+- vérifie l’état général après la mise à jour.
+
+La configuration locale est conservée.
+
+Depuis la v1.0.31, l’updater ne suppose plus que le processus est arrêté après un délai fixe : il vérifie réellement avant de remplacer le binaire.
+
+---
+
+## Outils de récupération
+
+`NovaBlock-Outils.zip` contient les outils de diagnostic et de récupération du projet.
+
+Ils sont destinés aux problèmes techniques réels : installation bloquée, réseau perturbé, diagnostic ou réparation.
+
+Ils ne constituent pas le chemin normal de déblocage utilisateur ; le chemin prévu reste le code détenu par l’accountability partner et le processus intégré à NovaBlock.
+
+---
+
+## Emails
+
+NovaBlock évite volontairement les notifications inutiles.
+
+Des emails peuvent notamment être envoyés lors :
+
+- de l’installation initiale ;
+- d’une demande explicite de nouveau code ;
+- du démarrage du processus de désinstallation lorsque cette action prévoit une notification.
+
+La simple détection d’un site ou l’affichage d’un popup ne provoque pas automatiquement un nouvel email.
+
+---
+
+## Limites
+
+NovaBlock est un outil d’auto-discipline Windows, pas une solution de sécurité matérielle ou un contrôle parental inviolable.
+
+Un utilisateur disposant d’un contrôle total de la machine et déterminé à modifier profondément son environnement peut toujours finir par neutraliser un logiciel userland.
+
+Le but du projet est différent : ajouter plusieurs couches de friction, rendre les contournements ordinaires pénibles et empêcher qu’une impulsion de quelques minutes suffise à désactiver le système.
+
+---
+
+## Développement
+
+Cloner le dépôt :
 
 ```bash
 git clone https://github.com/novaiax/novablock-X.git
 cd novablock-X
+```
+
+Compiler sous Windows :
+
+```bat
 build.bat
 ```
 
-Le `.exe` sort dans `dist\NovaBlock.exe`. Aucune clé API n'est nécessaire au build : elle est demandée au premier lancement.
+Le projet utilise notamment :
 
-Python 3.10+, Tkinter, pystray, pywin32, argon2-cffi, requests, psutil, PyInstaller.
+- Python ;
+- Tkinter ;
+- pywin32 ;
+- pywinauto ;
+- psutil ;
+- pystray ;
+- Pillow ;
+- argon2 ;
+- requests ;
+- PyInstaller.
+
+Les releases officielles exécutent les tests `test_*.py`, compilent le véritable `NovaBlock.exe`, puis lancent un autotest du binaire compilé avant publication.
 
 ---
 
 ## Licence
 
-[MIT](LICENSE) par **Yann Wirtz**.
+NovaBlock est distribué sous licence [MIT](LICENSE).
 
-Liste de domaines : [StevenBlack/hosts](https://github.com/StevenBlack/hosts) - DNS familial : [Cloudflare 1.1.1.3](https://1.1.1.1/family/)
+La blocklist adulte externe utilisée par le projet provient de [StevenBlack/hosts](https://github.com/StevenBlack/hosts).
