@@ -36,6 +36,9 @@ DEFAULTS: dict[str, Any] = {
     "custom_popup_domains": [],
     "custom_popup_urls": [],
     "custom_popup_only_migrated": False,
+    # v1.0.34+: exact user-defined words/phrases that trigger a popup in the
+    # active browser title, address bar or focused editable field.
+    "custom_popup_words": [],
     "machine_name": "",
 }
 
@@ -58,6 +61,18 @@ def _normalize_url(u: str) -> str:
     if not (u.startswith("http://") or u.startswith("https://")):
         u = "https://" + u.lstrip("/")
     return u
+
+
+def _normalize_popup_word(word: str) -> str:
+    """Canonical form for a user-defined popup word/phrase.
+
+    Matching is case-insensitive and exact at word boundaries. Whitespace is
+    collapsed so accidental double spaces do not create duplicate rules.
+    """
+    value = " ".join(str(word or "").strip().lower().split())
+    if not value or len(value) > 120:
+        return ""
+    return value
 
 
 def _url_host(u: str) -> str:
@@ -186,6 +201,39 @@ def remove_custom_url(url: str) -> bool:
 
 def get_popup_urls() -> list[str]:
     return _combined_popup_urls(load())
+
+
+def add_custom_word(word: str) -> str:
+    """Add an exact popup word/phrase. Adding never requires the unlock code."""
+    value = _normalize_popup_word(word)
+    if not value:
+        return ""
+    cfg = load()
+    words = [_normalize_popup_word(v) for v in (cfg.get("custom_popup_words", []) or [])]
+    words = _dedupe([v for v in words if v])
+    if value not in words:
+        words.append(value)
+    cfg["custom_popup_words"] = words
+    save(cfg)
+    return value
+
+
+def remove_custom_word(word: str) -> bool:
+    value = _normalize_popup_word(word)
+    cfg = load()
+    words = [_normalize_popup_word(v) for v in (cfg.get("custom_popup_words", []) or [])]
+    words = _dedupe([v for v in words if v])
+    if value not in words:
+        return False
+    words.remove(value)
+    cfg["custom_popup_words"] = words
+    save(cfg)
+    return True
+
+
+def get_popup_words() -> list[str]:
+    words = [_normalize_popup_word(v) for v in (load().get("custom_popup_words", []) or [])]
+    return _dedupe([v for v in words if v])
 
 
 # Compatibility API consumed by blocker.py/browser_policies.py. Custom sites
