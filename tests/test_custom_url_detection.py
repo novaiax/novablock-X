@@ -7,11 +7,8 @@ from novablock.monitor import WindowMonitor
 class CustomUrlDetectionTests(unittest.TestCase):
     def make_monitor(self, domains=None, urls=None):
         monitor = WindowMonitor(lambda *_: None, poll_interval=1.0)
-        cfg = {
-            "custom_blocked_domains": domains or [],
-            "custom_blocked_urls": urls or [],
-        }
-        with patch("novablock.config.load", return_value=cfg):
+        with patch("novablock.config.get_popup_domains", return_value=domains or []), \
+             patch("novablock.config.get_popup_urls", return_value=urls or []):
             monitor._custom_cache_until = 0
             monitor._reload_custom_config()
         return monitor
@@ -34,6 +31,16 @@ class CustomUrlDetectionTests(unittest.TestCase):
     def test_unrelated_domain_does_not_match(self):
         m = self.make_monitor(domains=["instagram.com"])
         self.assertIsNone(m._match_custom_url("https://example.com/instagram-guide"))
+
+    def test_typing_in_address_bar_is_not_navigation(self):
+        m = self.make_monitor(domains=["instagram.com"])
+        with patch.object(m, "_read_address_bar", return_value=("https://instagram.com", True)):
+            self.assertIsNone(m._match_committed_custom_navigation(123))
+
+    def test_committed_navigation_triggers_immediately(self):
+        m = self.make_monitor(domains=["instagram.com"])
+        with patch.object(m, "_read_address_bar", return_value=("https://instagram.com", False)):
+            self.assertEqual(m._match_committed_custom_navigation(123), "instagram.com")
 
     def test_poll_interval_stays_near_instant(self):
         self.assertLessEqual(WindowMonitor(lambda *_: None, poll_interval=1.0).poll_interval, 0.10)
