@@ -13,7 +13,7 @@ class CustomPopupTriggerTests(unittest.TestCase):
         }
         with patch("novablock.config.load", return_value=cfg):
             m._custom_cache_until = 0
-            m._reload_custom_tokens()
+            m._reload_custom_config()
         return m
 
     def test_poll_interval_is_capped_at_100ms(self):
