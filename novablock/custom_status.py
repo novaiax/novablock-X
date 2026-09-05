@@ -1,4 +1,4 @@
-"""Compact NovaBlock main window with explicit popup-only custom sites."""
+"""Compact NovaBlock main window with popup-only custom sites and words."""
 import threading
 import time
 import tkinter as tk
@@ -20,10 +20,6 @@ class StatusWindow(BaseStatusWindow):
     HEIGHT = 700
 
     def _build(self) -> None:
-        # Move <=1.0.31 custom entries to popup-only storage before anything
-        # displays them. If this was the first migration, rebuild the adult
-        # network layers once in background so stale custom hosts/policies are
-        # removed without freezing the UI.
         migrated = False
         try:
             migrated = config.migrate_custom_sites_to_popup_only()
@@ -36,12 +32,12 @@ class StatusWindow(BaseStatusWindow):
                 daemon=True,
             ).start()
 
-        # BaseStatusWindow.__init__ initially centers the legacy 520x480 size.
-        # Override it once here and never resize again during refresh.
+        # Keep the same compact geometry. Adding custom words must not grow
+        # the window again; the two lists simply share the existing card.
         _center(self.root, self.WIDTH, self.HEIGHT)
         self.root.resizable(False, False)
 
-        outer = tk.Frame(self.root, bg=BG, padx=22, pady=18)
+        outer = tk.Frame(self.root, bg=BG, padx=22, pady=14)
         outer.pack(fill="both", expand=True)
 
         top = tk.Frame(outer, bg=BG)
@@ -56,44 +52,45 @@ class StatusWindow(BaseStatusWindow):
             outer, text="", font=("Segoe UI", 9), fg=MUTED, bg=BG,
             justify="left", anchor="w",
         )
-        self.stats_lbl.pack(fill="x", pady=(5, 10))
+        self.stats_lbl.pack(fill="x", pady=(4, 7))
 
         unlock_row = tk.Frame(outer, bg=BG)
-        unlock_row.pack(fill="x", pady=(0, 5))
+        unlock_row.pack(fill="x", pady=(0, 4))
         self.unlock_btn = tk.Button(
             unlock_row, text="Demander le code à mon ami",
             font=FONT_SM, bg=PRIMARY, fg="white", relief="flat",
-            padx=10, pady=7, command=self._request_unlock,
+            padx=10, pady=6, command=self._request_unlock,
         )
         self.unlock_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.enter_btn = tk.Button(
             unlock_row, text="J'ai le code — débloquer 24h",
             font=FONT_SM, bg="#fdcb6e", fg=ACCENT, relief="flat",
-            padx=10, pady=7, command=self._enter_code,
+            padx=10, pady=6, command=self._enter_code,
         )
         self.enter_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
         self.settings_btn = tk.Button(
             outer, text="⚙  Modifier mes infos",
             font=FONT_SM, bg="#dfe6e9", fg=ACCENT, relief="flat",
-            padx=10, pady=5, command=self._open_settings,
+            padx=10, pady=4, command=self._open_settings,
         )
-        self.settings_btn.pack(fill="x", pady=(0, 9))
+        self.settings_btn.pack(fill="x", pady=(0, 6))
 
-        ttk.Separator(outer).pack(fill="x", pady=(2, 9))
+        ttk.Separator(outer).pack(fill="x", pady=(1, 6))
 
         panel = tk.Frame(
-            outer, bg="white", padx=13, pady=11,
+            outer, bg="white", padx=12, pady=9,
             highlightbackground="#dfe6e9", highlightthickness=1,
         )
         panel.pack(fill="x")
 
+        # ---- Popup sites ----
         head = tk.Frame(panel, bg="white")
         head.pack(fill="x")
         tk.Label(head, text="Sites personnels surveillés pour popup",
-                 font=("Segoe UI", 11, "bold"), fg=ACCENT,
+                 font=("Segoe UI", 10, "bold"), fg=ACCENT,
                  bg="white").pack(side="left")
-        self.custom_count_lbl = tk.Label(head, text="", font=FONT_SM,
+        self.custom_count_lbl = tk.Label(head, text="", font=("Segoe UI", 9),
                                          fg=MUTED, bg="white")
         self.custom_count_lbl.pack(side="right")
 
@@ -103,65 +100,113 @@ class StatusWindow(BaseStatusWindow):
             "Détection URL réelle indisponible sur ce PC"
         )
         self.custom_engine_lbl = tk.Label(
-            panel, text=engine_text, font=("Segoe UI", 9),
+            panel, text=engine_text, font=("Segoe UI", 8),
             fg=MUTED, bg="white", justify="left",
         )
-        self.custom_engine_lbl.pack(anchor="w", pady=(2, 7))
+        self.custom_engine_lbl.pack(anchor="w", pady=(1, 4))
 
-        list_wrap = tk.Frame(panel, bg="white")
-        list_wrap.pack(fill="x")
+        site_wrap = tk.Frame(panel, bg="white")
+        site_wrap.pack(fill="x")
         self.custom_sites_list = tk.Listbox(
-            list_wrap, height=5, font=("Consolas", 9),
+            site_wrap, height=3, font=("Consolas", 9),
             relief="solid", bd=1, activestyle="none",
             selectmode="browse", exportselection=False,
         )
-        scrollbar = tk.Scrollbar(list_wrap, orient="vertical",
-                                 command=self.custom_sites_list.yview)
-        self.custom_sites_list.configure(yscrollcommand=scrollbar.set)
+        site_scroll = tk.Scrollbar(site_wrap, orient="vertical",
+                                   command=self.custom_sites_list.yview)
+        self.custom_sites_list.configure(yscrollcommand=site_scroll.set)
         self.custom_sites_list.pack(side="left", fill="x", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        site_scroll.pack(side="right", fill="y")
 
         site_actions = tk.Frame(panel, bg="white")
-        site_actions.pack(fill="x", pady=(8, 0))
+        site_actions.pack(fill="x", pady=(5, 0))
         self.add_site_btn = tk.Button(
-            site_actions, text="+ Ajouter un site popup",
-            font=FONT_SM, bg="#74b9ff", fg="white", relief="flat",
-            padx=10, pady=5, command=self._add_custom_site,
+            site_actions, text="+ Ajouter un site",
+            font=("Segoe UI", 9), bg="#74b9ff", fg="white", relief="flat",
+            padx=9, pady=4, command=self._add_custom_site,
         )
         self.add_site_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
         self.remove_site_btn = tk.Button(
             site_actions, text="− Retirer (code requis)",
-            font=FONT_SM, bg="#dfe6e9", fg=ACCENT, relief="flat",
-            padx=10, pady=5, command=self._remove_custom_site,
+            font=("Segoe UI", 9), bg="#dfe6e9", fg=ACCENT, relief="flat",
+            padx=9, pady=4, command=self._remove_custom_site,
         )
         self.remove_site_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
 
+        ttk.Separator(panel).pack(fill="x", pady=(8, 6))
+
+        # ---- Popup words ----
+        word_head = tk.Frame(panel, bg="white")
+        word_head.pack(fill="x")
+        tk.Label(word_head, text="Mots personnels surveillés pour popup",
+                 font=("Segoe UI", 10, "bold"), fg=ACCENT,
+                 bg="white").pack(side="left")
+        self.custom_word_count_lbl = tk.Label(word_head, text="", font=("Segoe UI", 9),
+                                              fg=MUTED, bg="white")
+        self.custom_word_count_lbl.pack(side="right")
+
+        word_engine = (
+            "Titre + URL + champ saisi actif • terme exact • contrôle ~100 ms"
+            if HAS_UIA else
+            "Titre uniquement sur ce PC (saisie UIA indisponible)"
+        )
+        tk.Label(panel, text=word_engine, font=("Segoe UI", 8),
+                 fg=MUTED, bg="white", justify="left").pack(anchor="w", pady=(1, 4))
+
+        word_wrap = tk.Frame(panel, bg="white")
+        word_wrap.pack(fill="x")
+        self.custom_words_list = tk.Listbox(
+            word_wrap, height=3, font=("Consolas", 9),
+            relief="solid", bd=1, activestyle="none",
+            selectmode="browse", exportselection=False,
+        )
+        word_scroll = tk.Scrollbar(word_wrap, orient="vertical",
+                                   command=self.custom_words_list.yview)
+        self.custom_words_list.configure(yscrollcommand=word_scroll.set)
+        self.custom_words_list.pack(side="left", fill="x", expand=True)
+        word_scroll.pack(side="right", fill="y")
+
+        word_actions = tk.Frame(panel, bg="white")
+        word_actions.pack(fill="x", pady=(5, 0))
+        self.add_word_btn = tk.Button(
+            word_actions, text="+ Ajouter un mot",
+            font=("Segoe UI", 9), bg="#74b9ff", fg="white", relief="flat",
+            padx=9, pady=4, command=self._add_custom_word,
+        )
+        self.add_word_btn.pack(side="left", fill="x", expand=True, padx=(0, 4))
+        self.remove_word_btn = tk.Button(
+            word_actions, text="− Retirer (code requis)",
+            font=("Segoe UI", 9), bg="#dfe6e9", fg=ACCENT, relief="flat",
+            padx=9, pady=4, command=self._remove_custom_word,
+        )
+        self.remove_word_btn.pack(side="left", fill="x", expand=True, padx=(4, 0))
+
         tk.Label(
             panel,
-            text="Le popup apparaît seulement quand tu engages réellement la navigation vers un site listé.",
+            text="Ex. « pro » correspond à pro, pas à professional ou programme.",
             font=("Segoe UI", 8), fg=MUTED, bg="white", justify="left",
-        ).pack(anchor="w", pady=(7, 0))
+        ).pack(anchor="w", pady=(5, 0))
 
-        ttk.Separator(outer).pack(fill="x", pady=(11, 8))
+        ttk.Separator(outer).pack(fill="x", pady=(7, 5))
 
         self.uninstall_btn = tk.Button(
             outer, text="Désinstaller NovaBlock (cooldown 7 jours)",
-            font=FONT_SM, bg="#dfe6e9", fg=ACCENT, relief="flat",
-            padx=10, pady=5, command=self._request_uninstall,
+            font=("Segoe UI", 9), bg="#dfe6e9", fg=ACCENT, relief="flat",
+            padx=10, pady=4, command=self._request_uninstall,
         )
         self.uninstall_btn.pack(fill="x")
 
         self.cancel_uninstall_btn = tk.Button(
             outer, text="Annuler la désinstallation",
-            font=FONT_SM, bg="#dfe6e9", fg=ACCENT, relief="flat",
-            padx=10, pady=5, command=self._cancel_uninstall,
+            font=("Segoe UI", 9), bg="#dfe6e9", fg=ACCENT, relief="flat",
+            padx=10, pady=4, command=self._cancel_uninstall,
         )
 
         self.feedback_lbl = tk.Label(
-            outer, text="", font=("Segoe UI", 9), fg=MUTED, bg=BG,
+            outer, text="", font=("Segoe UI", 8), fg=MUTED, bg=BG,
             wraplength=560, justify="left",
         )
-        self.feedback_lbl.pack(fill="x", pady=(7, 0))
+        self.feedback_lbl.pack(fill="x", pady=(4, 0))
 
         self._refresh_job = None
 
@@ -172,8 +217,6 @@ class StatusWindow(BaseStatusWindow):
             from . import blocker
             blocker.apply_full_block(kill_browsers=False)
         except Exception:
-            # The watchdog can repair again later; migration itself is already
-            # safe because network getters now always return empty custom lists.
             pass
 
     def _refresh_custom_sites_panel(self) -> None:
@@ -188,6 +231,16 @@ class StatusWindow(BaseStatusWindow):
         self.custom_count_lbl.config(text=f"{total} actif{'s' if total != 1 else ''}")
         if not total:
             self.custom_sites_list.insert("end", "(aucun site personnel enregistré)")
+
+    def _refresh_custom_words_panel(self) -> None:
+        words = config.get_popup_words()
+        self.custom_words_list.delete(0, "end")
+        for value in words:
+            self.custom_words_list.insert("end", f"MOT   {value}")
+        total = len(words)
+        self.custom_word_count_lbl.config(text=f"{total} actif{'s' if total != 1 else ''}")
+        if not total:
+            self.custom_words_list.insert("end", "(aucun mot personnel enregistré)")
 
     def _refresh(self) -> None:
         if getattr(self, "_refresh_job", None):
@@ -222,7 +275,7 @@ class StatusWindow(BaseStatusWindow):
             h = (cooldown % 86400) // 3600
             cooldown_txt = f"  •  Désinstallation : {d}j {h}h"
             if not self.cancel_uninstall_btn.winfo_manager():
-                self.cancel_uninstall_btn.pack(fill="x", pady=(5, 0))
+                self.cancel_uninstall_btn.pack(fill="x", pady=(4, 0))
         else:
             self.cancel_uninstall_btn.pack_forget()
 
@@ -231,6 +284,7 @@ class StatusWindow(BaseStatusWindow):
             f"Rotation code : {next_rot}j{cooldown_txt}"
         ))
         self._refresh_custom_sites_panel()
+        self._refresh_custom_words_panel()
         self._refresh_job = self.root.after(5000, self._refresh)
 
     def _add_custom_site(self) -> None:
@@ -347,6 +401,104 @@ class StatusWindow(BaseStatusWindow):
                 self.feedback_lbl.config(text=f"✓ Retirés : {', '.join(removed)}", fg="#00b894")
             else:
                 self.feedback_lbl.config(text="Aucune règle sélectionnée.", fg=MUTED)
+            self._refresh()
+
+        buttons = tk.Frame(dlg, bg=BG)
+        buttons.pack(fill="x", padx=20, pady=14)
+        tk.Button(buttons, text="Annuler", font=FONT_SM, bg="#ddd", fg=ACCENT,
+                  relief="flat", padx=12, pady=6, command=dlg.destroy).pack(side="right", padx=(8, 0))
+        tk.Button(buttons, text="Retirer", font=FONT_SM, bg=PRIMARY, fg="white",
+                  relief="flat", padx=12, pady=6, command=_remove).pack(side="right")
+
+    def _add_custom_word(self) -> None:
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Ajouter un mot popup")
+        dlg.configure(bg=BG)
+        _center(dlg, 500, 235)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="Déclencher un popup quand ce mot est détecté ou tapé",
+                 font=FONT_MD, fg=ACCENT, bg=BG).pack(anchor="w", padx=20, pady=(18, 6))
+        entry = tk.Entry(dlg, font=FONT_MD, relief="solid", bd=1)
+        entry.pack(fill="x", padx=20, pady=(4, 6), ipady=5)
+        entry.focus_set()
+        tk.Label(
+            dlg,
+            text=("Correspondance exacte, sans distinction majuscules/minuscules. "
+                  "Les phrases courtes sont aussi acceptées."),
+            font=("Segoe UI", 9), fg=MUTED, bg=BG, wraplength=455, justify="left",
+        ).pack(anchor="w", padx=20)
+
+        def _add():
+            raw = entry.get().strip()
+            added = config.add_custom_word(raw)
+            if not added:
+                messagebox.showerror("Impossible d'ajouter", "Mot ou phrase invalide.", parent=dlg)
+                return
+            dlg.destroy()
+            self.feedback_lbl.config(
+                text=f"✓ « {added} » ajouté. Détection active immédiatement.",
+                fg="#00b894",
+            )
+            self._refresh()
+
+        buttons = tk.Frame(dlg, bg=BG)
+        buttons.pack(fill="x", padx=20, pady=14)
+        tk.Button(buttons, text="Annuler", font=FONT_SM, bg="#ddd", fg=ACCENT,
+                  relief="flat", padx=12, pady=6, command=dlg.destroy).pack(side="right", padx=(8, 0))
+        tk.Button(buttons, text="Ajouter", font=FONT_SM, bg=PRIMARY, fg="white",
+                  relief="flat", padx=12, pady=6, command=_add).pack(side="right")
+        entry.bind("<Return>", lambda _e: _add())
+
+    def _remove_custom_word(self) -> None:
+        words = config.get_popup_words()
+        if not words:
+            messagebox.showinfo("Aucun mot", "Aucun mot personnel n'est enregistré.")
+            return
+
+        # Removing a restriction always requires the accountability code.
+        code_dlg = CodeDialog(self.root)
+        self.root.wait_window(code_dlg.top)
+        if not code_dlg.result:
+            return
+        cfg = config.load()
+        if not crypto.verify_code(code_dlg.result, cfg.get("code_hash", "")):
+            self.feedback_lbl.config(text="✗ Code incorrect.", fg=PRIMARY)
+            return
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title("Retirer un mot popup")
+        dlg.configure(bg=BG)
+        _center(dlg, 520, 350)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        tk.Label(dlg, text="Sélectionne les mots à retirer",
+                 font=FONT_MD, fg=ACCENT, bg=BG).pack(anchor="w", padx=20, pady=(18, 8))
+        box = tk.Frame(dlg, bg="white", padx=8, pady=6)
+        box.pack(fill="both", expand=True, padx=20)
+
+        vars_: dict[str, tk.BooleanVar] = {}
+        for value in words:
+            var = tk.BooleanVar(value=False)
+            vars_[value] = var
+            tk.Checkbutton(box, text=value, variable=var,
+                           font=FONT_SM, bg="white", fg=ACCENT,
+                           anchor="w").pack(fill="x", anchor="w")
+
+        def _remove():
+            removed: list[str] = []
+            for value, var in vars_.items():
+                if var.get() and config.remove_custom_word(value):
+                    removed.append(value)
+            dlg.destroy()
+            if removed:
+                self.feedback_lbl.config(text=f"✓ Retirés : {', '.join(removed)}", fg="#00b894")
+            else:
+                self.feedback_lbl.config(text="Aucun mot sélectionné.", fg=MUTED)
             self._refresh()
 
         buttons = tk.Frame(dlg, bg=BG)
