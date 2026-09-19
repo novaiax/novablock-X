@@ -2,7 +2,7 @@ name: Windows executable release
 
 on:
   push:
-    branches: [main, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
+    branches: [main, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss, fix/v1.0.35-guardian-service]
     paths: [RELEASE_VERSION]
   workflow_dispatch:
 
