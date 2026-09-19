@@ -43,6 +43,7 @@ class HeadlessRecoveryTests(IsolatedTest):
         self.mock(main.persistence, "startup_shortcut_present", return_value=True)
         self.mock(main.persistence, "add_startup_shortcut", return_value=True)
         self.mock(main.persistence, "logon_task_exists", return_value=True)
+        self.legacy_cleanup = self.mock(main.persistence, "remove_legacy_service", return_value=True)
         self.heartbeat = Mock()
         self.heartbeat.exists.return_value = True
         self.heartbeat.read_text.return_value = str(int(time.time()))
@@ -50,6 +51,7 @@ class HeadlessRecoveryTests(IsolatedTest):
 
     def test_dead_app_recovers_even_when_filters_intact(self):
         main.run_watchdog_headless()
+        self.legacy_cleanup.assert_called_once_with()
         self.restart.assert_called_once_with()
         self.repair.assert_not_called()
 
@@ -269,7 +271,7 @@ class RegistrationTests(IsolatedTest):
     def test_tasks_are_replaced_without_delete_gap(self):
         self.mock(main, "_migrate_hosts_if_youtube_present")
         installers = [self.mock(main.persistence, name, return_value=True) for name in
-                      ("install_scheduled_task", "install_logon_task", "add_startup_registry", "add_startup_shortcut")]
+                      ("install_scheduled_task", "install_logon_task", "add_startup_registry", "add_startup_shortcut", "install_service")]
         delete_watchdog = self.mock(main.persistence, "remove_scheduled_task")
         delete_app = self.mock(main.persistence, "remove_logon_task")
         main.ensure_persistence()
