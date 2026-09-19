@@ -161,6 +161,11 @@ goto :cleanup_ok
 :heartbeat_ok
 echo   [OK] NovaBlock is alive ^(heartbeat !HEART_AGE!s old^).
 
+REM Run the SYSTEM watchdog once immediately. In v1.0.35 it also removes
+REM the retired v1.0.34 NovaBlockService using LocalSystem rights.
+schtasks /Run /TN NovaBlockWatchdog >nul 2>&1
+timeout /t 2 /nobreak >nul
+
 :cleanup_ok
 del "%LOCK_FILE%" >nul 2>&1
 
@@ -179,6 +184,17 @@ if errorlevel 1 (
     echo   [PROBLEM] NovaBlockWatchdog task missing.
     set /a HEALTH+=1
 ) else echo   [OK] Scheduled watchdog present
+
+sc.exe query NovaBlockGuardian 2>nul | find /I "RUNNING" >nul
+if errorlevel 1 (
+    echo   [PROBLEM] NovaBlockGuardian service is not running.
+    set /a HEALTH+=1
+) else echo   [OK] NovaBlockGuardian service running
+
+sc.exe query NovaBlockService >nul 2>&1
+if not errorlevel 1 (
+    echo   [WARN] Retired v1.0.34 service still present; SYSTEM watchdog will retry cleanup.
+)
 
 tasklist /FI "IMAGENAME eq NovaBlock.exe" /NH 2>nul | find /I "NovaBlock.exe" >nul
 if errorlevel 1 (
