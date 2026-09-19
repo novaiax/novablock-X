@@ -1,34 +1,44 @@
-## NovaBlock v1.0.33 : fermer uniquement l'onglet qui a déclenché le popup
+## NovaBlock v1.0.34 : service NT LocalSystem contre les kills Task Manager
 
-### Correctif principal
+### Contexte
 
-Le comportement du bouton du popup est maintenant strict :
+Sous Windows, un administrateur porte par defaut le privilege `SeDebugPrivilege`. Ce privilege permet a Task Manager de contourner la DACL "deny PROCESS_TERMINATE" que NovaBlock applique sur son processus. En clair, la protection DACL existante suffit contre un user standard mais pas contre l administrateur qui ouvre son propre Task Manager.
 
-- L'apparition du popup ne ferme plus aucun onglet automatiquement.
-- NovaBlock mémorise la fenêtre navigateur (`HWND`) qui a déclenché le popup.
-- Quand tu cliques sur `Fermer l'onglet`, NovaBlock masque le popup, redonne le focus à cette fenêtre précise et envoie exactement un `Ctrl+F4`.
-- Le popup se ferme ensuite.
-- Le fallback qui pouvait tuer tout le processus Chrome/Edge/Firefox a été supprimé.
-- En cas d'échec de fermeture de l'onglet, NovaBlock n'escalade jamais vers la fermeture complète du navigateur.
+### Ce qui change
 
-### Comportement attendu
+NovaBlock installe maintenant un service NT sous compte LocalSystem, en plus des couches existantes.
 
-`navigation vers un site surveillé → popup → clic Fermer l'onglet → Ctrl+F4 sur la fenêtre qui a déclenché → seul l'onglet actif ciblé est fermé → les autres onglets restent ouverts`.
+- Task Manager > Processus n expose pas les services comme cible "Fin de tache" en un clic.
+- Le Service Control Manager ne respecte pas `SeDebugPrivilege` pour un Stop de service.
+- La DACL du service est verrouillee : services.msc ou `sc stop` renvoient Access denied tant que l administrateur n a pas explicitement pris possession du service.
 
-### Conservé de v1.0.32
+### Boucle du service
 
-- Sites personnels = popup uniquement après navigation réellement engagée.
-- Aucun popup pendant la saisie dans la barre d'adresse ou parce qu'une adresse apparaît dans une page.
-- `movix.cash` exclu des sites personnels surveillés.
-- Faux positif `pro` supprimé.
-- Interface principale compacte et fixe.
-- Sites adultes de base toujours protégés par DNS/hosts/policies + monitor en secours.
-- Updater robuste contre les fichiers `NovaBlock.exe` temporairement verrouillés.
+- Reapplique le blocage sur hosts, DNS, browser policies et regles pare-feu DoH toutes les 5 secondes.
+- Respawn de la fenetre principale via la tache planifiee interactive `NovaBlockApp`, jamais un Popen depuis la session 0.
+- Cede la main quand `recovery.update_in_progress()` ou `recovery.shutdown_requested()` sont actifs, donc l updater et la desinstallation verifiee fonctionnent comme avant.
 
-### Inchangé
+### Compatibilite
 
-Aucun nouvel email n'est envoyé. Le code, la rotation silencieuse, le cooldown de désinstallation, le watchdog et la relance automatique restent inchangés.
+- Les couches existantes restent en place : DACL de processus, watchdog mutuel, taches planifiees, self-heal recovery.
+- Aucune modification de `recovery.py`, `popup.py`, `custom_status.py`, `tab_close.py`, `companion.py`, `process_protect.py`, `monitor.py`, `browser_policies.py`, `blocker.py`, `config.py`.
+- Nouveaux drapeaux CLI : `--service-run` (dispatch SCM), `--install-service`, `--uninstall-service`.
 
-### Validation
+### Filet de securite
 
-La release est publiée uniquement après réussite de tous les tests `test_*.py`, compilation du vrai `NovaBlock.exe` sous Windows et autotest runtime du binaire compilé.
+`EMERGENCY_RESET.bat` a ete etendu pour desserrer la DACL du service, l arreter et le supprimer avant la sequence habituelle. Si le service pose probleme, un reset ramene NovaBlock au comportement v1.0.33.
+
+### Verification
+
+Une fois v1.0.34 installee :
+- ouvre Task Manager > Details
+- clic droit sur `NovaBlock.exe` > Fin de tache
+- resultat attendu : Access denied
+
+Pour tester le service :
+- `sc query NovaBlockService` renvoie RUNNING
+- `sc stop NovaBlockService` renvoie Access denied par defaut
+
+Pour desinstaller proprement :
+- via l app : bouton "Desinstaller" apres cooldown 7 jours + code
+- ou : `EMERGENCY_RESET.bat` pour rollback complet
