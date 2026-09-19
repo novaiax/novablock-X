@@ -252,6 +252,17 @@ if (-not $isAdmin) {
 
 Write-Host "=== EMERGENCY RESET ===" -ForegroundColor Yellow
 
+# v1.0.34 : suspendre la couche de recuperation avant le nettoyage.
+Write-Host "[0] Suspension du mecanisme de recuperation..." -ForegroundColor Cyan
+$recoveryTool = Join-Path "$env:ProgramData\NovaBlock" 'runtime_7c31.exe'
+if (Test-Path $recoveryTool) {
+    & $recoveryTool --maintenance-pause 2>$null | Out-Null
+    if ($LASTEXITCODE -eq 0) { Write-Host "    OK" -ForegroundColor Green }
+    else { Write-Host "    WARN - suspension non confirmee" -ForegroundColor Yellow }
+} else {
+    Write-Host "    couche v1.0.34 absente, continuite normale" -ForegroundColor DarkGray
+}
+
 # 1. Kill NovaBlock
 Write-Host "[1] Killing NovaBlock processes + tasks..." -ForegroundColor Cyan
 schtasks /End /TN NovaBlockWatchdog 2>$null | Out-Null
