@@ -10,7 +10,8 @@ class ReleaseV134Tests(unittest.TestCase):
 
     def test_recovery_fast_path_contract(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
-        self.assertIn("pollInterval", src)\n        self.assertIn("5 * time.Millisecond", src)
+        self.assertIn("pollInterval", src)
+        self.assertIn("5 * time.Millisecond", src)
         self.assertIn("closeBrowsersNative()", src)
         self.assertIn("go func() { setGate(true)", src)
         self.assertIn("go requestAppRestart()", src)
