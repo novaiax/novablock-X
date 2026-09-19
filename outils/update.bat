@@ -99,6 +99,8 @@ powershell -NoProfile -Command "Get-Process NovaBlock -ErrorAction SilentlyConti
 timeout /t 1 /nobreak >nul
 set /a STOP_WAITED+=1
 if !STOP_WAITED! lss 35 goto :wait_process_exit
+
+:process_still_running
 echo   [ERROR] NovaBlock.exe reste actif apres !STOP_WAITED! secondes.
 goto :cleanup_fail
 
