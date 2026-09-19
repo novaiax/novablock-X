@@ -4,13 +4,31 @@ setlocal enabledelayedexpansion
 REM ============================================================
 REM NovaBlock - Update from latest GitHub release
 REM Robust against the old exe remaining locked for a few seconds.
-REM Usage: right-click -> Run as administrator
+REM Normal: right-click -> Run as administrator
+REM Validation build: update.bat --local "C:\path\to\NovaBlock.exe"
 REM ============================================================
+
+set "LOCAL_SOURCE="
+if /I "%~1"=="--local" (
+    if "%~2"=="" (
+        echo [ERROR] --local requires the path to a NovaBlock.exe.
+        exit /b 2
+    )
+    for %%I in ("%~2") do set "LOCAL_SOURCE=%%~fI"
+    if not exist "!LOCAL_SOURCE!" (
+        echo [ERROR] Local build not found: !LOCAL_SOURCE!
+        exit /b 2
+    )
+)
 
 net session >nul 2>&1
 if %errorlevel% neq 0 (
     echo [INFO] Re-launching as administrator...
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    if defined LOCAL_SOURCE (
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '--local','!LOCAL_SOURCE!' -Verb RunAs"
+    ) else (
+        powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
+    )
     exit /b 0
 )
 
@@ -57,25 +75,32 @@ if "%INSTALL_PATH%"=="" (
 echo   Found at: %INSTALL_PATH%
 for %%i in ("%INSTALL_PATH%") do set "INSTALL_DIR=%%~dpi"
 
-REM ----- Step 2: download while old app still runs -----
-echo [2/7] Downloading latest NovaBlock.exe from GitHub...
+REM ----- Step 2: prepare replacement while old app still runs -----
 set "DOWNLOAD_URL=https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe"
 set "TMP_FILE=%INSTALL_PATH%.tmp"
 if exist "%TMP_FILE%" del /F /Q "%TMP_FILE%" >nul 2>&1
 
-curl --version >nul 2>&1
-if %errorlevel% equ 0 (
-    curl -L -f --progress-bar -o "%TMP_FILE%" "%DOWNLOAD_URL%"
+if defined LOCAL_SOURCE (
+    echo [2/7] Preparing local validation build...
+    echo   Source: !LOCAL_SOURCE!
+    copy /Y "!LOCAL_SOURCE!" "%TMP_FILE%" >nul
     set "DL_RESULT=!errorlevel!"
 ) else (
-    powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TMP_FILE%' -UseBasicParsing } catch { exit 1 }"
-    set "DL_RESULT=!errorlevel!"
+    echo [2/7] Downloading latest NovaBlock.exe from GitHub...
+    curl --version >nul 2>&1
+    if %errorlevel% equ 0 (
+        curl -L -f --progress-bar -o "%TMP_FILE%" "%DOWNLOAD_URL%"
+        set "DL_RESULT=!errorlevel!"
+    ) else (
+        powershell -NoProfile -Command "try { [Net.ServicePointManager]::SecurityProtocol='Tls12'; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%TMP_FILE%' -UseBasicParsing } catch { exit 1 }"
+        set "DL_RESULT=!errorlevel!"
+    )
 )
 if not !DL_RESULT! equ 0 goto :download_failed
 for %%A in ("%TMP_FILE%") do set "DL_SIZE=%%~zA"
 if not defined DL_SIZE goto :download_failed
 if !DL_SIZE! lss 5000000 goto :download_failed
-echo   Downloaded !DL_SIZE! bytes OK.
+echo   Replacement prepared: !DL_SIZE! bytes OK.
 
 REM ----- Step 3: stop ALL NovaBlock processes, then VERIFY -----
 echo [3/7] Stopping NovaBlock and waiting for file handles to close...
