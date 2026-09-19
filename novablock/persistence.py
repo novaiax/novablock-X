@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .paths import LOGON_TASK_NAME, TASK_NAME, exe_path
@@ -309,3 +310,141 @@ def remove_startup_shortcut() -> bool:
 
 def startup_shortcut_present() -> bool:
     return _shortcut_path(common=True).exists() or _shortcut_path(common=False).exists()
+
+# ---------------------------------------------------------------------------
+# Windows NT guardian service.
+# ---------------------------------------------------------------------------
+# This service is deliberately NOT a second network watchdog.
+# DNS, hosts, browser policies and firewall repair remain owned by the normal
+# v1.0.33 watchdog paths. The service only watches process liveness and asks
+# the existing interactive NovaBlockApp scheduled task to relaunch the GUI.
+#
+# The old v1.0.34 service was named NovaBlockService. v1.0.35 migrates away
+# from it so a stale installation cannot keep running the retired code path.
+
+from .service import SERVICE_NAME as _SERVICE_NAME
+
+_LEGACY_SERVICE_NAME = "NovaBlockService"
+_FULL_SERVICE_DACL = (
+    "D:"
+    "(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)"
+    "(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
+)
+_TIGHT_SERVICE_DACL = (
+    "D:"
+    "(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)"
+    "(A;;CCLCSWRPLORCWD;;;BA)"
+    "(A;;CCLCSWLOCRRC;;;IU)"
+    "(A;;CCLCSWLOCRRC;;;SU)"
+)
+
+
+def _service_binpath() -> str:
+    return f'"{exe_path()}" --service-run'
+
+
+def _service_exists_name(name: str) -> bool:
+    code, _out, _err = _run(["sc.exe", "query", name], timeout=10)
+    return code == 0
+
+
+def _remove_service_name(name: str) -> bool:
+    if not _service_exists_name(name):
+        return True
+
+    # Administrators retain WRITE_DAC on the v1.0.35 service specifically so
+    # a verified uninstall/update can restore full control before Stop/Delete.
+    _run(["sc.exe", "sdset", name, _FULL_SERVICE_DACL])
+    _run(["sc.exe", "stop", name])
+    time.sleep(0.5)
+    code, _out, err = _run(["sc.exe", "delete", name])
+    if code != 0:
+        log.warning("Could not delete service %s: %s", name, err)
+        return False
+    return True
+
+
+def remove_legacy_service() -> bool:
+    """Best-effort cleanup of the retired v1.0.34 NovaBlockService."""
+    ok = _remove_service_name(_LEGACY_SERVICE_NAME)
+    if ok:
+        log.info("Legacy NovaBlockService absent or removed")
+    return ok
+
+
+def _apply_service_dacl() -> bool:
+    code, _out, err = _run(["sc.exe", "sdset", _SERVICE_NAME, _TIGHT_SERVICE_DACL])
+    if code != 0:
+        log.warning("Could not tighten guardian service DACL: %s", err)
+        return False
+    return True
+
+
+def install_service() -> bool:
+    """Install/refresh the lightweight LocalSystem guardian.
+
+    The guardian never touches DNS, hosts, browser policy or firewall state.
+    It only relaunches the interactive NovaBlock process when it disappears.
+    """
+    # Remove the retired v1.0.34 service first. Failure is logged, but does not
+    # stop us from installing the new guardian under a different service name.
+    remove_legacy_service()
+
+    binpath = _service_binpath()
+
+    if _service_exists_name(_SERVICE_NAME):
+        # Temporarily restore admin control so an in-place update can refresh
+        # binPath/config, then tighten the DACL again.
+        _run(["sc.exe", "sdset", _SERVICE_NAME, _FULL_SERVICE_DACL])
+        code, _out, err = _run([
+            "sc.exe", "config", _SERVICE_NAME,
+            "binPath=", binpath,
+            "start=", "auto",
+        ])
+        if code != 0:
+            log.warning("sc config guardian refresh failed: %s", err)
+            _apply_service_dacl()
+            return False
+    else:
+        code, _out, err = _run([
+            "sc.exe", "create", _SERVICE_NAME,
+            "binPath=", binpath,
+            "start=", "auto",
+            "DisplayName=", "NovaBlock Guardian",
+            "type=", "own",
+            "error=", "normal",
+        ])
+        if code != 0:
+            log.error("sc create guardian failed: %s", err)
+            return False
+
+    _run([
+        "sc.exe", "description", _SERVICE_NAME,
+        "NovaBlock lightweight guardian. Relaunch only; no DNS/hosts/firewall changes."
+    ])
+    _run([
+        "sc.exe", "failure", _SERVICE_NAME,
+        "reset=", "86400",
+        "actions=", "restart/1000/restart/1000/restart/5000",
+    ])
+    _apply_service_dacl()
+    _run(["sc.exe", "start", _SERVICE_NAME])
+    log.info("NovaBlock Guardian installed/refreshed")
+    return True
+
+
+def remove_service() -> bool:
+    """Remove v1.0.35 guardian and any leftover v1.0.34 service."""
+    ok_guardian = _remove_service_name(_SERVICE_NAME)
+    ok_legacy = _remove_service_name(_LEGACY_SERVICE_NAME)
+    return ok_guardian and ok_legacy
+
+
+def service_exists() -> bool:
+    return _service_exists_name(_SERVICE_NAME)
+
+
+def service_running() -> bool:
+    code, out, _err = _run(["sc.exe", "query", _SERVICE_NAME], timeout=10)
+    return code == 0 and "RUNNING" in out
+
