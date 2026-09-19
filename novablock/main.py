@@ -193,6 +193,15 @@ def run_watchdog_headless() -> None:
         log.info("Update/verified shutdown in progress — recovery paused")
         return
 
+    # Migration from the retired v1.0.34 service. This headless task normally
+    # runs as LocalSystem, so it can remove the old service even when its
+    # restrictive DACL rejects an elevated administrator.
+    try:
+        if not persistence.remove_legacy_service():
+            log.warning("Legacy v1.0.34 service cleanup is still pending")
+    except Exception as e:
+        log.warning("Legacy v1.0.34 service cleanup failed: %s", e)
+
     main_alive = single_instance.is_running()
     try:
         if config.is_temp_unlocked():
@@ -259,6 +268,7 @@ def run_diagnostic() -> int:
     lines.append(f"   Watchdog task    : {persistence.task_exists()}")
     lines.append(f"   Logon task       : {persistence.logon_task_exists()}")
     lines.append(f"   Startup shortcut : {persistence.startup_shortcut_present()}")
+    lines.append(f"   Guardian service : {persistence.service_running()}")
     lines.append(f"   Main mutex       : {single_instance.is_running()}")
     lines.append(f"   Companion PID    : {companion._read_pid(companion.COMPANION_PID_FILE)}")
     lines.append(f"   Maintenance      : {recovery.recovery_paused()}")
@@ -335,8 +345,8 @@ def main() -> int:
     parser.add_argument("--watchdog", action="store_true", help="Headless repair and app recovery")
     parser.add_argument("--companion", action="store_true", help="Mutual-watchdog companion")
     parser.add_argument("--service-run", action="store_true", help="Run as Windows NT service (dispatched by SCM)")
-    parser.add_argument("--install-service", action="store_true", help="Install the NovaBlockService (admin)")
-    parser.add_argument("--uninstall-service", action="store_true", help="Remove the NovaBlockService (admin)")
+    parser.add_argument("--install-service", action="store_true", help="Install the NovaBlockGuardian service (admin)")
+    parser.add_argument("--uninstall-service", action="store_true", help="Remove NovaBlock guardian services (admin)")
     parser.add_argument("--uninstall", action="store_true", help="Finalize uninstall")
     parser.add_argument("--check", action="store_true", help="Run diagnostic")
     parser.add_argument("--reapply", action="store_true", help="Force re-apply blocking")
