@@ -6,7 +6,7 @@ L’objectif est simple : rendre l’accès impulsif au contenu adulte suffisamm
 
 Le déblocage temporaire utilise un code de 25 caractères. Le code en clair n’est pas affiché à l’utilisateur : il est envoyé à l’ami de confiance configuré dans NovaBlock.
 
-> Version actuelle : **v1.0.33**
+> Version de développement : **v1.0.35** (`fix/v1.0.35-guardian-service`)
 
 ---
 
@@ -247,11 +247,28 @@ Le système comprend notamment :
 - un processus compagnon ;
 - une tâche planifiée watchdog ;
 - une tâche interactive permettant de relancer l’interface dans la session utilisateur ;
-- une heartbeat permettant de détecter une instance qui ne répond plus normalement.
+- une heartbeat permettant de détecter une instance qui ne répond plus normalement ;
+- depuis la v1.0.35, un service Windows LocalSystem séparé, `NovaBlockGuardian`, dédié uniquement à la relance du processus principal.
 
-Si le processus principal est fermé de manière inattendue, le système tente de relancer NovaBlock automatiquement.
+### Gardien v1.0.35
 
-Le but n’est pas de rendre le processus techniquement impossible à terminer, mais de rendre une fermeture ponctuelle non suffisante pour neutraliser durablement le blocage.
+`NovaBlockGuardian` est volontairement isolé de la logique réseau.
+
+Il ne modifie **jamais** le DNS, le fichier hosts, les politiques navigateur ou le pare-feu. Ces protections restent gérées par les chemins watchdog hérités de la v1.0.33.
+
+Son rôle est limité à :
+
+1. vérifier régulièrement si le processus principal NovaBlock existe encore ;
+2. si ce processus a disparu, demander à la tâche interactive `NovaBlockApp` de le relancer dans la session utilisateur ;
+3. être lui-même redémarré rapidement par le Service Control Manager s’il plante.
+
+Cette séparation est destinée à éviter la régression de la v1.0.34, où le service SYSTEM effectuait aussi des réapplications réseau répétées.
+
+La migration v1.0.35 tente également de supprimer l’ancien service `NovaBlockService` de la v1.0.34. Le watchdog SYSTEM effectue ce nettoyage avec les droits LocalSystem afin de gérer les installations où la DACL de l’ancien service refuse une suppression par un simple administrateur élevé.
+
+Si le processus principal est fermé de manière inattendue, plusieurs couches peuvent donc tenter de le relancer : compagnon, tâches planifiées et gardien SYSTEM.
+
+Le but n’est pas de prétendre qu’un administrateur Windows déterminé ne pourra jamais neutraliser le logiciel. La v1.0.35 cherche plutôt à supprimer la neutralisation durable par une simple fermeture du processus et à raccourcir fortement la fenêtre entre l’arrêt et la reprise, sans toucher au réseau pendant cette reprise.
 
 ---
 
@@ -272,6 +289,8 @@ L’updater :
 - attend que Windows libère l’ancien `.exe` ;
 - retente le remplacement si le fichier reste momentanément verrouillé ;
 - relance NovaBlock ;
+- déclenche une passe immédiate du watchdog SYSTEM pour nettoyer un éventuel service v1.0.34 résiduel ;
+- vérifie que `NovaBlockGuardian` tourne ;
 - vérifie l’état général après la mise à jour.
 
 La configuration locale est conservée.
