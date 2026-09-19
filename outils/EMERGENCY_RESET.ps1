@@ -253,7 +253,15 @@ if (-not $isAdmin) {
 Write-Host "=== EMERGENCY RESET ===" -ForegroundColor Yellow
 
 # 1. Kill NovaBlock
-Write-Host "[1] Killing NovaBlock processes + tasks..." -ForegroundColor Cyan
+Write-Host "[1] Killing NovaBlock processes + tasks + service..." -ForegroundColor Cyan
+# Loosen the service DACL first (install_service tightens it so admin
+# cannot stop without taking ownership). Then stop and delete.
+foreach ($svc in @('NovaBlockGuardian', 'NovaBlockService')) {
+    sc.exe sdset $svc "D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)" 2>$null | Out-Null
+    sc.exe stop $svc 2>$null | Out-Null
+    Start-Sleep -Milliseconds 500
+    sc.exe delete $svc 2>$null | Out-Null
+}
 schtasks /End /TN NovaBlockWatchdog 2>$null | Out-Null
 schtasks /End /TN NovaBlockApp 2>$null | Out-Null
 Stop-Process -Name NovaBlock -Force -ErrorAction SilentlyContinue
