@@ -98,6 +98,12 @@ def ensure_persistence() -> None:
         ("interactive app task", persistence.install_logon_task),
         ("startup registry", persistence.add_startup_registry),
         ("startup shortcut", persistence.add_startup_shortcut),
+        # LocalSystem NT service: the strongest kill-resistance layer on top
+        # of the PROCESS_TERMINATE-denying DACL, the mutual companion, and
+        # the scheduled tasks. Task Manager > Processes does not expose it
+        # as a one-click end-task target, and the tightened service DACL
+        # requires an admin to take ownership before Stop is accepted.
+        ("NT service", persistence.install_service),
     ):
         try:
             if not install():
@@ -311,6 +317,7 @@ def run_uninstall_check() -> int:
     except Exception:
         pass
     blocker.remove_full_block()
+    persistence.remove_service()
     persistence.remove_scheduled_task()
     persistence.remove_logon_task()
     persistence.remove_startup_registry()
@@ -330,6 +337,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="NovaBlock", add_help=False)
     parser.add_argument("--watchdog", action="store_true", help="Headless repair and app recovery")
     parser.add_argument("--companion", action="store_true", help="Mutual-watchdog companion")
+    parser.add_argument("--service-run", action="store_true", help="Run as Windows NT service (dispatched by SCM)")
+    parser.add_argument("--install-service", action="store_true", help="Install the NovaBlockService (admin)")
+    parser.add_argument("--uninstall-service", action="store_true", help="Remove the NovaBlockService (admin)")
     parser.add_argument("--uninstall", action="store_true", help="Finalize uninstall")
     parser.add_argument("--check", action="store_true", help="Run diagnostic")
     parser.add_argument("--reapply", action="store_true", help="Force re-apply blocking")
@@ -339,9 +349,20 @@ def main() -> int:
         from .release_selftest import run
         return run(args.self_test)
 
+    # --service-run is invoked by the Service Control Manager. It must
+    # return control to the SCM ASAP, so it runs before every other
+    # check (including the admin check: SYSTEM is always effectively
+    # admin, and calling IsUserAnAdmin from the SCM context has weird
+    # behaviour we do not want to trigger).
+    if args.service_run:
+        setup_logging()
+        from . import service as _svc
+        return _svc.run_as_service()
+
     setup_logging()
     log = logging.getLogger("novablock.main")
     log.info("NovaBlock starting (argv=%s)", sys.argv)
+
     if args.companion:
         return companion.run_companion_loop() or 0
     if args.watchdog:
@@ -354,6 +375,14 @@ def main() -> int:
         log.warning("Not admin — re-launching with elevation")
         relaunch_as_admin()
         return 0
+    if args.install_service:
+        ok = persistence.install_service()
+        return 0 if ok else 1
+
+    if args.uninstall_service:
+        ok = persistence.remove_service()
+        return 0 if ok else 1
+
     if args.uninstall:
         return run_uninstall_check()
     if args.check:

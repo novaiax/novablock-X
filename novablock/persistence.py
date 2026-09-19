@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from .paths import LOGON_TASK_NAME, TASK_NAME, exe_path
@@ -309,3 +310,129 @@ def remove_startup_shortcut() -> bool:
 
 def startup_shortcut_present() -> bool:
     return _shortcut_path(common=True).exists() or _shortcut_path(common=False).exists()
+
+
+# ---------------------------------------------------------------------------
+# Windows NT service — main protection layer against Task Manager kills.
+# ---------------------------------------------------------------------------
+# The service runs the same watchdog work as the scheduled task, but as a
+# LocalSystem NT service instead of a per-minute scheduled action. Task
+# Manager > Processes shows service processes differently and does not offer
+# an "End task" that succeeds; the service can only be stopped via services
+# .msc or `sc stop`, and even that path requires an admin who understands
+# what they are doing. Combined with our restrictive DACL (set below) an
+# admin has to take ownership of the service before Stop is accepted.
+#
+# The scheduled tasks and companion process stay in place as fallbacks.
+
+from .service import SERVICE_NAME as _SERVICE_NAME
+
+
+def _service_binpath() -> str:
+    """binPath for sc.exe. We wrap the exe path in double quotes so any
+    space in `C:\\Program Files\\...` doesn't split the argument."""
+    exe = str(exe_path())
+    return f'"{exe}" --service-run'
+
+
+def install_service() -> bool:
+    """Create the NovaBlockService via sc.exe. Idempotent: if the service
+    already exists we just refresh its binPath (in case the exe moved after
+    an update). Requires admin (setup wizard runs elevated)."""
+    binpath = _service_binpath()
+
+    # If the service exists, refresh its config only. Deleting first would
+    # briefly leave a window with no protection.
+    if service_exists():
+        code, _out, err = _run([
+            "sc.exe", "config", _SERVICE_NAME,
+            "binPath=", binpath,
+            "start=", "auto",
+        ])
+        if code != 0:
+            log.warning("sc config refresh failed: %s", err)
+            return False
+        _apply_service_dacl()
+        _run(["sc.exe", "description", _SERVICE_NAME,
+              "NovaBlock system watchdog. Do not stop."])
+        _run(["sc.exe", "start", _SERVICE_NAME])
+        log.info("NovaBlockService config refreshed")
+        return True
+
+    code, _out, err = _run([
+        "sc.exe", "create", _SERVICE_NAME,
+        "binPath=", binpath,
+        "start=", "auto",
+        "DisplayName=", "NovaBlock Service",
+        "type=", "own",
+        "error=", "normal",
+    ])
+    if code != 0:
+        log.error("sc create failed: %s", err)
+        return False
+    _run(["sc.exe", "description", _SERVICE_NAME,
+          "NovaBlock system watchdog. Do not stop."])
+    # Auto-restart on crash: reset every 24h, restart after 5s each of the
+    # first two failures, then reset. Keeps the service alive even if the
+    # user manages to crash it once.
+    _run(["sc.exe", "failure", _SERVICE_NAME,
+          "reset=", "86400",
+          "actions=", "restart/5000/restart/5000/restart/30000"])
+    _apply_service_dacl()
+    _run(["sc.exe", "start", _SERVICE_NAME])
+    log.info("NovaBlockService installed and started")
+    return True
+
+
+def _apply_service_dacl() -> None:
+    """Tighten the service DACL so even an admin has to take ownership of
+    the service before stopping it.
+
+    Default service DACL is roughly:
+      D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)   SYSTEM full
+      (A;;CCLCSWRPWPDTLOCRRC;;;BA)     Admin full (including STOP)
+      (A;;CCLCSWLOCRRC;;;IU)           Interactive read
+      (A;;CCLCSWLOCRRC;;;SU)           Service read
+
+    We remove WP (write) from Admin so `sc stop` returns access denied
+    unless they first take ownership. SY (SYSTEM) keeps full control so
+    our own start/stop/config still work."""
+    tight = (
+        "D:"
+        "(A;;CCLCSWRPWPDTLOCRRC;;;SY)"   # SYSTEM full
+        "(A;;CCLCSWLORC;;;BA)"           # Admin: query/enum/start only, NO stop/delete/write
+        "(A;;CCLCSWLORC;;;IU)"           # Interactive read
+        "(A;;CCLCSWLORC;;;SU)"           # Service read
+    )
+    _run(["sc.exe", "sdset", _SERVICE_NAME, tight])
+
+
+def remove_service() -> bool:
+    """Stop + delete the service. Called during verified uninstall.
+    The DACL lockdown from install_service applies to us too, so we
+    take ownership back before Stop/Delete."""
+    if not service_exists():
+        return True
+    # Restore permissive DACL so we can stop and delete cleanly.
+    _run(["sc.exe", "sdset", _SERVICE_NAME,
+          "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPDTLOCRRC;;;BA)"])
+    _run(["sc.exe", "stop", _SERVICE_NAME])
+    time.sleep(1)
+    code, _out, err = _run(["sc.exe", "delete", _SERVICE_NAME])
+    if code != 0:
+        log.warning("sc delete failed: %s", err)
+        return False
+    log.info("NovaBlockService removed")
+    return True
+
+
+def service_exists() -> bool:
+    code, _out, _err = _run(["sc.exe", "query", _SERVICE_NAME], timeout=10)
+    return code == 0
+
+
+def service_running() -> bool:
+    code, out, _err = _run(["sc.exe", "query", _SERVICE_NAME], timeout=10)
+    if code != 0:
+        return False
+    return "RUNNING" in out
