@@ -6,7 +6,7 @@ L’objectif est simple : rendre l’accès impulsif au contenu adulte suffisamm
 
 Le déblocage temporaire utilise un code de 25 caractères. Le code en clair n’est pas affiché à l’utilisateur : il est envoyé à l’ami de confiance configuré dans NovaBlock.
 
-> Version actuelle : **v1.0.34**
+> Version actuelle : **v1.0.33**
 
 ---
 
@@ -107,19 +107,6 @@ Un monitor observe la fenêtre active du navigateur.
 Si le titre de la page contient un mot-clé adulte reconnu, NovaBlock peut afficher le popup plein écran même si le domaine lui-même n’était pas déjà connu.
 
 Cette couche sert de filet de sécurité pour du contenu adulte hébergé ailleurs que sur les gros domaines classiques.
-
-### Résistance à la fermeture
-
-NovaBlock empile plusieurs couches pour survivre à une tentative de fermeture depuis le gestionnaire de tâches ou la ligne de commande.
-
-- **DACL de processus** (`novablock/process_protect.py`) : le processus principal et son companion refusent `PROCESS_TERMINATE` et `PROCESS_SUSPEND_RESUME` à tout le monde. Un `taskkill` ordinaire renvoie « Accès refusé ».
-- **Watchdog mutuel** (`novablock/companion.py`) : deux processus qui se surveillent et se relancent en moins d'une seconde si l'un est tué.
-- **Tâche planifiée SYSTEM** (`NovaBlockWatchdog`) : filet de sécurité qui relance NovaBlock si les deux processus tombent au même moment.
-- **Recovery interactive-session** (`novablock/recovery.py`) : demande à la tâche `NovaBlockApp` de relancer la fenêtre principale sans jamais passer par la session 0 (les fenêtres Tk seraient invisibles).
-- **Service NT LocalSystem** (`novablock/service.py`) : couche introduite en v1.0.34. Un administrateur porte par défaut le privilège `SeDebugPrivilege`, ce qui lui permet de contourner la DACL depuis Task Manager. Le service `NovaBlockService` tourne sous `LocalSystem`, n'apparaît pas comme cible « Fin de tâche » dans l'onglet Processus, et sa DACL est verrouillée pour que même `services.msc` ou `sc stop` renvoient « Accès refusé » avant qu'un administrateur ait explicitement pris possession du service.
-- **Self-test avant release** (`novablock/release_selftest.py`) : la CI GitHub Actions rejette une release dont le hardening ne s'applique pas.
-
-Pour désinstaller proprement, il faut passer par l'app avec le code de l'ami. Pour un rollback d'urgence en cas de bug, l'outil `EMERGENCY_RESET.bat` désactive toutes les couches en séquence, y compris le service NT.
 
 ---
 
