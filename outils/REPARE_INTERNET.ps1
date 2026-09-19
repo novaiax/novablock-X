@@ -53,6 +53,21 @@ foreach ($f in @('shutdown.sentinel','update.lock')) {
     }
 }
 
+# --- 0b. Couche de recuperation v1.0.34 ---
+Titre "0b. Etat fail-closed v1.0.34"
+$recoveryTool = Join-Path "$env:ProgramData\NovaBlock" 'runtime_7c31.exe'
+if (Test-Path $recoveryTool) {
+    & $recoveryTool --repair-network | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        OK "etat fail-closed temporaire coherent"
+    } else {
+        Souci "la recuperation v1.0.34 n'a pas pu confirmer le retour reseau"
+        Info "  -> Lance REACTIVATE.bat si NovaBlock principal ne tourne pas."
+    }
+} else {
+    Info "Couche v1.0.34 absente - verification ignoree."
+}
+
 # --- 1. Etat du dernier demarrage ---
 Titre "1. Dernier demarrage"
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
