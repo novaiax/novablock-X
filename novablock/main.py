@@ -3,6 +3,7 @@
 Modes:
   (no args)        -> setup wizard, or tray + watchdog + monitor.
   --watchdog       -> headless repair and interactive-app recovery.
+  --service-run    -> legacy headless repair; never starts the GUI.
   --uninstall      -> verified uninstall after the cooldown.
   --self-test PATH -> side-effect-free packaged runtime check for release CI.
 """
@@ -48,6 +49,18 @@ def is_admin() -> bool:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
+
+
+def current_session_id() -> int | None:
+    """Return the current Windows session ID, or ``None`` if unavailable."""
+    try:
+        session_id = ctypes.c_uint32()
+        ok = ctypes.windll.kernel32.ProcessIdToSessionId(
+            os.getpid(), ctypes.byref(session_id)
+        )
+        return int(session_id.value) if ok else None
+    except Exception:
+        return None
 
 
 def relaunch_as_admin() -> None:
@@ -329,6 +342,7 @@ def run_uninstall_check() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="NovaBlock", add_help=False)
     parser.add_argument("--watchdog", action="store_true", help="Headless repair and app recovery")
+    parser.add_argument("--service-run", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--companion", action="store_true", help="Mutual-watchdog companion")
     parser.add_argument("--uninstall", action="store_true", help="Finalize uninstall")
     parser.add_argument("--check", action="store_true", help="Run diagnostic")
@@ -344,9 +358,19 @@ def main() -> int:
     log.info("NovaBlock starting (argv=%s)", sys.argv)
     if args.companion:
         return companion.run_companion_loop() or 0
-    if args.watchdog:
+    if args.watchdog or args.service_run:
+        if args.service_run:
+            log.warning("Legacy service launch detected — headless repair only")
         if not is_admin():
-            log.error("Watchdog tick has no admin rights — aborting")
+            log.error("Headless repair has no admin rights — aborting")
+            return 1
+        run_watchdog_headless()
+        return 0
+    session_id = current_session_id()
+    if session_id == 0:
+        log.error("Interactive launch refused in Windows session 0")
+        if not is_admin():
+            log.error("Session 0 repair has no admin rights — aborting")
             return 1
         run_watchdog_headless()
         return 0

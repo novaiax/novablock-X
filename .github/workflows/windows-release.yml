@@ -2,9 +2,23 @@ name: Windows executable release
 
 on:
   push:
-    branches: [main, release/v1.0.34-v5, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
-    paths: [RELEASE_VERSION]
+    branches: [main, release/v1.0.34-v5, fix/startup-ui-recovery, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
+    paths:
+      - .github/workflows/windows-release.yml
+      - novablock/**
+      - recovery_v134/**
+      - tests/**
+      - outils/**
+      - novablock.spec
+      - requirements.txt
+      - RELEASE_VERSION
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish the tested build from main as the public release
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,6 +66,8 @@ jobs:
       - name: Validate recovery layer source
         working-directory: recovery_v134
         run: |
+          go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd/recovery/rsrc --manifest cli --admin --product-version 1.0.34.0 --file-version 1.0.34.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $files = gofmt -l .
           if ($files) { Write-Host $files; throw 'gofmt required' }
           go vet ./...
@@ -115,8 +131,8 @@ jobs:
           path: dist-release/*
           if-no-files-found: error
 
-      - name: Publish complete release (main only)
-        if: github.ref == 'refs/heads/main'
+      - name: Publish complete release (explicit main dispatch only)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.publish_release == true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

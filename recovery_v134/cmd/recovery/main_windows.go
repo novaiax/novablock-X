@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ const (
 	displayName   = "Aegis Recovery Runtime"
 	installedFile = "runtime_7c31.exe"
 	gateRuleName  = "AegisRecoveryGate_7C31"
+	aclRepairTask = "AegisRecoveryRepair_7C31"
 
 	appTaskName   = "NovaBlockApp"
 	mainMutexName = `Global\NovaBlock_SingleInstance_Mutex`
@@ -43,6 +45,7 @@ var (
 	kernel32 = syscall.NewLazyDLL("kernel32.dll")
 	advapi32 = syscall.NewLazyDLL("advapi32.dll")
 	shell32  = syscall.NewLazyDLL("shell32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
 
 	procOpenMutexW               = kernel32.NewProc("OpenMutexW")
 	procCloseHandle              = kernel32.NewProc("CloseHandle")
@@ -57,6 +60,7 @@ var (
 	procSetServiceStatus              = advapi32.NewProc("SetServiceStatus")
 
 	procIsUserAnAdmin = shell32.NewProc("IsUserAnAdmin")
+	procMessageBoxW   = user32.NewProc("MessageBoxW")
 )
 
 const (
@@ -124,8 +128,42 @@ var browserNames = map[string]struct{}{
 	"ucbrowser.exe": {},
 }
 
+var predecessorServices = []string{
+	"NovaBlockService",
+	"NovaBlockGuardian",
+	"NovaBlockRecoveryGuard",
+	"SessionContinuitySvc",
+}
+
+var predecessorTasks = []string{
+	"NovaBlockRecoveryGuard",
+	"NovaBlockRecoveryGuardStartup",
+	"NovaBlockRecoveryGuardLogon",
+}
+
+var predecessorRules = []string{
+	"NovaBlock Recovery Guard",
+	"Session Continuity Network Gate",
+}
+
+var predecessorFiles = []string{
+	"NovaBlockRecoveryGuard.exe",
+	"recovery_guard.heartbeat",
+	"recovery_guard.active",
+	"SessionContinuity.exe",
+	"session_continuity.heartbeat",
+	"session_continuity.probe",
+	"RECOVERY_LAYER_VERSION.txt",
+}
+
+var predecessorProcessNames = map[string]struct{}{
+	"novablockrecoveryguard.exe": {},
+	"sessioncontinuity.exe":      {},
+}
+
 func main() {
 	action := defaultAction
+	interactiveLaunch := len(os.Args) == 1
 	if len(os.Args) > 1 {
 		action = strings.ToLower(strings.TrimSpace(os.Args[1]))
 	}
@@ -146,6 +184,8 @@ func main() {
 		err = maintenancePause()
 	case "--rollback", "rollback":
 		err = rollback()
+	case "--service-acl-repair":
+		err = repairServiceACLAsSystem()
 	case "--version", "version":
 		fmt.Println(releaseVersion)
 		return
@@ -155,8 +195,27 @@ func main() {
 	if err != nil {
 		logLine("ERROR: %v", err)
 		fmt.Fprintln(os.Stderr, err)
+		if interactiveLaunch {
+			showMessage("NovaBlock v1.0.34 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
+		}
 		os.Exit(1)
 	}
+	if interactiveLaunch {
+		showMessage("NovaBlock v1.0.34", "Installation et controle de sante termines avec succes.", false)
+	}
+}
+
+func showMessage(title string, message string, isError bool) {
+	titlePtr, titleErr := syscall.UTF16PtrFromString(title)
+	messagePtr, messageErr := syscall.UTF16PtrFromString(message)
+	if titleErr != nil || messageErr != nil {
+		return
+	}
+	flags := uintptr(0x40) // MB_ICONINFORMATION
+	if isError {
+		flags = 0x10 // MB_ICONERROR
+	}
+	procMessageBoxW.Call(0, uintptr(unsafe.Pointer(messagePtr)), uintptr(unsafe.Pointer(titlePtr)), flags)
 }
 
 func programDataDir() string {
@@ -170,6 +229,9 @@ func programDataDir() string {
 func installedPath() string { return filepath.Join(programDataDir(), installedFile) }
 func heartbeatPath() string { return filepath.Join(programDataDir(), "recovery_v134.heartbeat") }
 func logPath() string       { return filepath.Join(programDataDir(), "update_v134.log") }
+func aclRepairMarkerPath() string {
+	return filepath.Join(programDataDir(), "recovery_v134.acl-repair")
+}
 
 func logLine(format string, args ...any) {
 	_ = os.MkdirAll(programDataDir(), 0o755)
@@ -228,6 +290,13 @@ func runBestEffort(name string, args ...string) {
 	_, _ = runCommand(name, args...)
 }
 
+func runLoggedBestEffort(name string, args ...string) {
+	out, err := runCommand(name, args...)
+	if err != nil {
+		logLine("command failed: %s %s: %v output=%s", name, strings.Join(args, " "), err, strings.TrimSpace(out))
+	}
+}
+
 func installOrRepair() error {
 	if err := requireAdmin(); err != nil {
 		return err
@@ -239,9 +308,22 @@ func installOrRepair() error {
 	if err := os.MkdirAll(programDataDir(), 0o755); err != nil {
 		return err
 	}
+	if err := validateInteractiveTask(); err != nil {
+		return err
+	}
+	if serviceIsRunning() && freshHeartbeat(2*time.Second) &&
+		installedBinaryMatchesSelf() && !predecessorServicesPresent() {
+		if mainRunning() {
+			setGate(false)
+		}
+		logLine("install/repair already healthy")
+		fmt.Println("NovaBlock v1.0.34 recovery layer: OK")
+		return nil
+	}
 
-	cleanupExperimentalServices()
-	loosenServiceACL()
+	if err := ensureServiceMaintenanceAccess(); err != nil {
+		return fmt.Errorf("prepare recovery service maintenance: %w", err)
+	}
 	runBestEffort("sc.exe", "stop", serviceName)
 	waitForServiceStop(4 * time.Second)
 	_ = os.Remove(heartbeatPath())
@@ -255,15 +337,19 @@ func installOrRepair() error {
 	if err := ensureService(); err != nil {
 		return fmt.Errorf("register recovery service: %w", err)
 	}
-	tightenServiceACL()
 
 	runBestEffort("sc.exe", "start", serviceName)
 	if err := waitFreshHeartbeat(8 * time.Second); err != nil {
-		loosenServiceACL()
+		_ = loosenServiceACL()
 		runBestEffort("sc.exe", "stop", serviceName)
 		setGate(false)
 		return fmt.Errorf("recovery component did not become healthy: %w", err)
 	}
+	if err := waitForPredecessorRemoval(8 * time.Second); err != nil {
+		setGate(false)
+		return err
+	}
+	tightenServiceACL()
 
 	if mainRunning() {
 		setGate(false)
@@ -316,6 +402,35 @@ func installSelfCopy() error {
 	}
 }
 
+func fileSHA256(path string) ([sha256.Size]byte, error) {
+	var empty [sha256.Size]byte
+	f, err := os.Open(path)
+	if err != nil {
+		return empty, err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err = io.Copy(h, f); err != nil {
+		return empty, err
+	}
+	var sum [sha256.Size]byte
+	copy(sum[:], h.Sum(nil))
+	return sum, nil
+}
+
+func installedBinaryMatchesSelf() bool {
+	self, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	selfHash, err := fileSHA256(self)
+	if err != nil {
+		return false
+	}
+	installedHash, err := fileSHA256(installedPath())
+	return err == nil && selfHash == installedHash
+}
+
 func ensureGateRule() error {
 	runBestEffort("netsh", "advfirewall", "firewall", "delete", "rule", "name="+gateRuleName)
 	_, err := runCommand("netsh", "advfirewall", "firewall", "add", "rule",
@@ -352,9 +467,30 @@ func ensureService() error {
 	return nil
 }
 
-func loosenServiceACL() {
-	runBestEffort("sc.exe", "sdset", serviceName,
-		"D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPDTLOCRRC;;;BA)")
+func validateInteractiveTask() error {
+	out, err := runCommand("schtasks.exe", "/Query", "/TN", appTaskName, "/XML")
+	if err != nil {
+		return fmt.Errorf("required interactive app task is unavailable: %w", err)
+	}
+	compact := strings.ToLower(strings.Join(strings.Fields(out), ""))
+	if !strings.Contains(compact, "<logontype>interactivetoken</logontype>") {
+		return errors.New("app task must use an interactive user token")
+	}
+	if strings.Contains(compact, "<userid>s-1-5-18</userid>") ||
+		strings.Contains(compact, "<userid>system</userid>") {
+		return errors.New("app task must not run as LocalSystem")
+	}
+	if !strings.Contains(compact, "novablock.exe</command>") ||
+		strings.Contains(compact, "--service-run") {
+		return errors.New("app task action is not a supported interactive NovaBlock launch")
+	}
+	return nil
+}
+
+func loosenServiceACL() error {
+	const maintenanceACL = "D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
+	_, err := runCommand("sc.exe", "sdset", serviceName, maintenanceACL)
+	return err
 }
 
 func tightenServiceACL() {
@@ -362,10 +498,81 @@ func tightenServiceACL() {
 		"D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWLORC;;;BA)(A;;CCLCSWLORC;;;IU)(A;;CCLCSWLORC;;;SU)")
 }
 
+func serviceExists() bool {
+	return namedServiceExists(serviceName)
+}
+
+func namedServiceExists(name string) bool {
+	_, err := runCommand("sc.exe", "query", name)
+	return err == nil
+}
+
+func isLocalSystem() bool {
+	out, err := runCommand("whoami.exe", "/user", "/fo", "csv", "/nh")
+	return err == nil && strings.Contains(strings.ToUpper(out), "S-1-5-18")
+}
+
+func repairServiceACLAsSystem() error {
+	if !isLocalSystem() {
+		return errors.New("service ACL repair is restricted to LocalSystem")
+	}
+	if !serviceExists() {
+		return errors.New("recovery service does not exist")
+	}
+	if err := loosenServiceACL(); err != nil {
+		return err
+	}
+	return os.WriteFile(aclRepairMarkerPath(), []byte("ok\r\n"), 0o644)
+}
+
+func ensureServiceMaintenanceAccess() error {
+	if !serviceExists() {
+		return nil
+	}
+	if err := loosenServiceACL(); err == nil {
+		return nil
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	marker := aclRepairMarkerPath()
+	_ = os.Remove(marker)
+	defer os.Remove(marker)
+	runBestEffort("schtasks.exe", "/Delete", "/TN", aclRepairTask, "/F")
+	defer runBestEffort("schtasks.exe", "/Delete", "/TN", aclRepairTask, "/F")
+	action := fmt.Sprintf(`"%s" --service-acl-repair`, self)
+	if _, err = runCommand(
+		"schtasks.exe", "/Create", "/TN", aclRepairTask, "/TR", action,
+		"/SC", "ONCE", "/ST", "00:00", "/RU", "SYSTEM", "/RL", "HIGHEST", "/F",
+	); err != nil {
+		return fmt.Errorf("create one-time system repair: %w", err)
+	}
+	if _, err = runCommand("schtasks.exe", "/Run", "/TN", aclRepairTask); err != nil {
+		return fmt.Errorf("start one-time system repair: %w", err)
+	}
+
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, statErr := os.Stat(marker); statErr == nil {
+			if err = loosenServiceACL(); err == nil {
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("one-time system ACL repair did not complete")
+}
+
 func waitForServiceStop(max time.Duration) {
+	waitForNamedServiceStop(serviceName, max)
+}
+
+func waitForNamedServiceStop(name string, max time.Duration) {
 	deadline := time.Now().Add(max)
 	for time.Now().Before(deadline) {
-		out, _ := runCommand("sc.exe", "query", serviceName)
+		out, _ := runCommand("sc.exe", "query", name)
 		if !strings.Contains(out, ": 4") && !strings.Contains(out, ": 2") && !strings.Contains(out, ": 3") {
 			return
 		}
@@ -373,12 +580,54 @@ func waitForServiceStop(max time.Duration) {
 	}
 }
 
-func cleanupExperimentalServices() {
-	for _, name := range []string{"NovaBlockService", "NovaBlockGuardian"} {
-		runBestEffort("sc.exe", "sdset", name, "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPDTLOCRRC;;;BA)")
-		runBestEffort("sc.exe", "stop", name)
-		runBestEffort("sc.exe", "delete", name)
+func cleanupPredecessorComponents(forceStuckProcess bool) {
+	const maintenanceACL = "D:(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
+	forceStuckProcess = forceStuckProcess && isLocalSystem()
+	for _, name := range predecessorServices {
+		runLoggedBestEffort("sc.exe", "sdset", name, maintenanceACL)
+		runLoggedBestEffort("sc.exe", "stop", name)
+		waitForNamedServiceStop(name, 2*time.Second)
+		// Mark deletion before the last-resort process termination so the SCM
+		// cannot apply an old automatic-restart policy to the retired runtime.
+		runLoggedBestEffort("sc.exe", "delete", name)
+		if forceStuckProcess && namedServiceExists(name) {
+			terminated := terminateProcessesByName(predecessorProcessNames)
+			if terminated > 0 {
+				logLine("terminated %d stuck predecessor process(es)", terminated)
+				waitForNamedServiceStop(name, time.Second)
+			}
+			runLoggedBestEffort("sc.exe", "delete", name)
+		}
 	}
+	for _, name := range predecessorTasks {
+		runLoggedBestEffort("schtasks.exe", "/Delete", "/TN", name, "/F")
+	}
+	for _, name := range predecessorRules {
+		runLoggedBestEffort("netsh.exe", "advfirewall", "firewall", "delete", "rule", "name="+name)
+	}
+	for _, name := range predecessorFiles {
+		_ = os.Remove(filepath.Join(programDataDir(), name))
+	}
+}
+
+func predecessorServicesPresent() bool {
+	for _, name := range predecessorServices {
+		if namedServiceExists(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func waitForPredecessorRemoval(max time.Duration) error {
+	deadline := time.Now().Add(max)
+	for time.Now().Before(deadline) {
+		if !predecessorServicesPresent() {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return errors.New("a predecessor recovery component could not be removed")
 }
 
 func maintenancePause() error {
@@ -386,7 +635,9 @@ func maintenancePause() error {
 		return err
 	}
 	logLine("maintenance pause requested")
-	loosenServiceACL()
+	if err := ensureServiceMaintenanceAccess(); err != nil {
+		return err
+	}
 	runBestEffort("sc.exe", "stop", serviceName)
 	waitForServiceStop(4 * time.Second)
 	runBestEffort("sc.exe", "config", serviceName, "start=", "disabled")
@@ -399,13 +650,15 @@ func rollback() error {
 		return err
 	}
 	logLine("rollback to v1.0.33 base start")
-	loosenServiceACL()
+	if err := ensureServiceMaintenanceAccess(); err != nil {
+		return err
+	}
 	runBestEffort("sc.exe", "stop", serviceName)
 	waitForServiceStop(4 * time.Second)
 	runBestEffort("sc.exe", "delete", serviceName)
 	setGate(false)
 	runBestEffort("netsh", "advfirewall", "firewall", "delete", "rule", "name="+gateRuleName)
-	cleanupExperimentalServices()
+	cleanupPredecessorComponents(false)
 	_ = os.Remove(heartbeatPath())
 	_ = os.Remove(installedPath())
 	runBestEffort("schtasks", "/Run", "/TN", appTaskName)
@@ -507,7 +760,7 @@ func requestAppRestart() {
 	}
 }
 
-func closeBrowsersNative() int {
+func terminateProcessesByName(names map[string]struct{}) int {
 	snap, _, _ := procCreateToolhelp32Snapshot.Call(th32csSnapProcess, 0)
 	invalid := ^uintptr(0)
 	if snap == 0 || snap == invalid {
@@ -521,7 +774,7 @@ func closeBrowsersNative() int {
 	killed := 0
 	for ok != 0 {
 		exe := strings.ToLower(syscall.UTF16ToString(pe.exeFile[:]))
-		if _, match := browserNames[exe]; match {
+		if _, match := names[exe]; match {
 			h, _, _ := procOpenProcess.Call(processTerminate, 0, uintptr(pe.processID))
 			if h != 0 {
 				r, _, _ := procTerminateProcess.Call(h, 1)
@@ -535,6 +788,10 @@ func closeBrowsersNative() int {
 		ok, _, _ = procProcess32NextW.Call(snap, uintptr(unsafe.Pointer(&pe)))
 	}
 	return killed
+}
+
+func closeBrowsersNative() int {
+	return terminateProcessesByName(browserNames)
 }
 
 func recoverMain() {
@@ -604,6 +861,9 @@ func writeHeartbeat() {
 
 func serviceLoop() {
 	logLine("recovery service loop start (%s)", releaseVersion)
+	// This process runs as LocalSystem, so it can remove a locked predecessor
+	// that an elevated interactive updater could only detect but not replace.
+	cleanupPredecessorComponents(true)
 	nextHB := time.Time{}
 	nextMaintenanceCheck := time.Time{}
 	maintenance := false

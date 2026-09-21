@@ -12,6 +12,8 @@ import time
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
+from . import tab_close
+
 try:
     import win32gui
     import win32process
@@ -317,6 +319,9 @@ class WindowMonitor:
                 title = win32gui.GetWindowText(hwnd) or ""
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 if self._is_browser(pid):
+                    if tab_close.close_recently_sent(hwnd):
+                        self._stop.wait(self.poll_interval)
+                        continue
                     hit = self._match_committed_custom_navigation(hwnd)
                     if hit:
                         log.warning("Committed custom navigation detected: %r hwnd=%s", hit, hwnd)

@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+from novablock import tab_close
 from novablock.popup import BlockedPopup
 
 
@@ -21,6 +22,9 @@ class _FakeRoot:
 
 
 class PopupTabCloseTests(unittest.TestCase):
+    def tearDown(self):
+        tab_close._recent_closes.clear()
+
     def test_popup_appearance_does_not_close_any_tab(self):
         popup = BlockedPopup.__new__(BlockedPopup)
         with patch("novablock.popup.tab_close.close_one_tab") as close_one:
@@ -43,6 +47,13 @@ class PopupTabCloseTests(unittest.TestCase):
     def test_followup_never_kills_browser(self):
         popup = BlockedPopup.__new__(BlockedPopup)
         self.assertIsNone(popup._followup_kill())
+
+    def test_recent_close_suppresses_only_the_same_window_briefly(self):
+        with patch.object(tab_close.time, "monotonic", side_effect=[100.0, 100.2, 100.2, 102.0]):
+            tab_close._remember_close(424242)
+            self.assertTrue(tab_close.close_recently_sent(424242))
+            self.assertFalse(tab_close.close_recently_sent(99))
+            self.assertFalse(tab_close.close_recently_sent(424242))
 
 
 if __name__ == "__main__":

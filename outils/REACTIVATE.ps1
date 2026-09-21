@@ -76,8 +76,16 @@ if (-not $exePath) {
     Read-Host "Entree pour fermer"
     exit 1
 }
-try { Start-Process -FilePath $exePath -ErrorAction Stop; OK "lancement demande" }
-catch { Souci "lancement impossible : $($_.Exception.Message)" }
+$appTask = Get-ScheduledTask -TaskName 'NovaBlockApp' -ErrorAction SilentlyContinue
+try {
+    if ($appTask -and $appTask.State -ne 'Disabled') {
+        Start-ScheduledTask -TaskName 'NovaBlockApp' -ErrorAction Stop
+        OK "lancement interactif demande via NovaBlockApp"
+    } else {
+        Start-Process -FilePath $exePath -ErrorAction Stop
+        OK "lancement direct demande; la tache interactive sera recreee"
+    }
+} catch { Souci "lancement impossible : $($_.Exception.Message)" }
 
 Write-Host "[4] Attente du heartbeat principal..." -ForegroundColor Cyan
 $hb = Join-Path $nb 'watchdog.heartbeat'
@@ -112,11 +120,21 @@ if ($recoveryTool) {
 }
 
 Write-Host "[6] Verification reseau et protections..." -ForegroundColor Cyan
-$dns = (Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
-        Where-Object { $_.ServerAddresses.Count -gt 0 } |
-        Select-Object -First 1 -ExpandProperty ServerAddresses) -join ', '
-if ($dns -match '1\.1\.1\.3|1\.0\.0\.3|9\.9\.9\.11') { OK "DNS familial actif" }
-else { Info "DNS familial pas encore detecte; NovaBlock peut encore etre en cours de reapplication" }
+$familyV4 = @('1.1.1.3','1.0.0.3','185.228.168.168','185.228.169.168','208.67.222.123','208.67.220.123')
+$familyV6 = @('2606:4700:4700::1113','2606:4700:4700::1003','2a0d:2a00:1::','2a0d:2a00:2::')
+$dns = @(Get-DnsClientServerAddress -ErrorAction SilentlyContinue |
+         ForEach-Object { $_.ServerAddresses } |
+         Where-Object { $_ })
+$hasFamilyV4 = @($dns | Where-Object { $familyV4 -contains $_ }).Count -gt 0
+$hasFamilyV6 = @($dns | Where-Object { $familyV6 -contains $_ }).Count -gt 0
+if ($hasFamilyV4 -and $hasFamilyV6) { OK "DNS familiaux IPv4 et IPv6 actifs" }
+else { Souci "DNS familiaux incomplets; laisse NovaBlock terminer sa reapplication" }
+
+try {
+    $web = Invoke-WebRequest -Uri 'https://example.com' -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    if ($web.StatusCode -ge 200 -and $web.StatusCode -lt 400) { OK "connexion Internet HTTPS operationnelle" }
+    else { Souci "controle HTTPS inattendu : $($web.StatusCode)" }
+} catch { Souci "connexion HTTPS indisponible : $($_.Exception.Message)" }
 
 try {
     $fw = New-Object -ComObject HNetCfg.FwPolicy2

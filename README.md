@@ -4,13 +4,37 @@ NovaBlock est un bloqueur Windows de contenu adulte et de distractions, avec plu
 
 ## Version actuelle
 
-**v1.0.34**
+**v1.0.34 (candidate de réparation, non publiée)**
 
-La v1.0.34 conserve le cœur applicatif sain de la v1.0.33 et ajoute la couche de récupération v5 validée en conditions réelles.
+La v1.0.34 part du cœur v1.0.33, ajoute la couche de récupération v5 validée en conditions réelles et corrige le démarrage interactif ainsi que la sélection du DNS familial.
+
+La publication publique reste volontairement bloquée jusqu'à validation réelle d'un redémarrage Windows complet. Le workflow GitHub construit les artefacts sur les branches de réparation, mais une release exige désormais un déclenchement manuel explicite depuis `main`.
 
 Lors du test réel ayant servi de référence, une fermeture forcée de l'application principale a été suivie d'un retour en moins d'une seconde. La v5 réduit aussi la fenêtre interactive entre la disparition de l'application et son retour en fermant immédiatement les navigateurs, puis en lançant en parallèle la protection réseau fail-closed et la relance.
 
 Le chemin rapide de récupération ne modifie pas le DNS, les cartes réseau, le service DNS Windows ni le fichier hosts. Ces mécanismes restent gérés par le cœur NovaBlock normal, pas par la couche de récupération v5.
+
+## Incident de démarrage corrigé
+
+Le diagnostic réel a montré qu'un ancien composant de démarrage lançait l'application complète dans la session Windows 0. Cette instance invisible prenait le mutex global avant l'ouverture de session de Yann : le processus apparaissait dans le Gestionnaire des tâches, mais aucune fenêtre, icône de zone de notification ni popup ne pouvait apparaître dans la session utilisateur. Une seconde instance interactive quittait alors immédiatement.
+
+La correction agit à trois niveaux :
+
+- l'ancien argument de service est reconnu et ne peut lancer qu'une réparation sans interface ;
+- une garde interdit à l'interface graphique de démarrer en session 0 ;
+- la couche v5 valide la tâche `NovaBlockApp` comme tâche interactive et nettoie ses seuls prédécesseurs connus depuis son contexte système.
+
+La tâche `NovaBlockApp` reste le chemin normal de lancement au logon. Elle doit s'exécuter avec le jeton interactif de l'utilisateur, jamais sous `LocalSystem`.
+
+## DNS familial et connexion Internet
+
+Les adresses Quad9 `9.9.9.10` / `149.112.112.10` ont été retirées : elles ne constituent pas un filtre adulte/famille. NovaBlock utilise désormais uniquement des endpoints familiaux vérifiés, dans cet ordre :
+
+1. Cloudflare Family ;
+2. CleanBrowsing Family ;
+3. OpenDNS FamilyShield, associé à Cloudflare Family pour IPv6.
+
+IPv4 et IPv6 doivent tous deux rester filtrés. En cas de timeout Windows pendant la configuration, NovaBlock abandonne le changement en cours au lieu d'enchaîner les modifications réseau. Les contrôles de mise à jour vérifient ensuite à la fois la présence d'un DNS familial dual-stack et une connexion HTTPS bénigne.
 
 ## Téléchargement
 
@@ -36,13 +60,15 @@ Les binaires de release sont reconstruits par GitHub Actions à partir des sourc
 5. Il installe ou répare la couche de récupération v1.0.34.
 6. Il relance NovaBlock et vérifie le heartbeat de l'application ainsi que celui du mécanisme de récupération.
 
-Un update interrompu est conçu pour échouer proprement et réarmer l'installation précédente plutôt que de laisser une mise à jour partielle.
+Un update interrompu est conçu pour échouer proprement et réarmer l'installation précédente plutôt que de laisser une mise à jour partielle. Le script n'arrête plus NovaBlock de force et ne modifie plus les ACL du fichier `hosts` : il demande un arrêt volontaire, attend de façon bornée, conserve une copie du cœur précédent et restaure cette copie si le swap n'aboutit pas.
+
+Le relais UAC conserve les chemins contenant des espaces. Le mode local écrit deux entrées SHA-256 distinctes, journalise son résultat final et laisse jusqu'à 20 secondes au watchdog pour appliquer le DNS familial avant de conclure à un échec. `update.exe` sait également reprendre une installation partielle dont le composant de récupération a déjà été créé puis verrouillé ; cette réparation reste strictement limitée au composant concerné et nettoie sa tâche ponctuelle.
 
 ## Architecture v1.0.34
 
 La protection est volontairement séparée en deux niveaux.
 
-### Cœur v1.0.33
+### Socle v1.0.33 durci par v1.0.34
 
 Le cœur Python garde les fonctions déjà stabilisées :
 
@@ -51,6 +77,10 @@ Le cœur Python garde les fonctions déjà stabilisées :
 - compagnon de récupération ;
 - tâches planifiées et persistance ;
 - interface, popup, code de désinstallation et configuration existante.
+
+La v1.0.34 ajoute au cœur deux corrections bornées : la garde de session Windows 0 et l'exclusion des resolvers qui ne filtrent pas réellement le contenu adulte.
+
+La fermeture explicite d'un onglet bloqué mémorise brièvement le handle ciblé après l'envoi réussi de `Ctrl+F4`. Cela évite un second popup pendant les quelques millisecondes où Chrome affiche encore l'ancien titre, tout en laissant les autres fenêtres et les échecs de fermeture immédiatement détectables.
 
 ### Couche de récupération v5
 
@@ -98,7 +128,7 @@ La CI Windows effectue avant publication :
 - tests statiques de cohérence release/outils ;
 - génération des empreintes SHA-256 ;
 - création de l'archive d'outils ;
-- publication uniquement sur `main` si toutes les étapes précédentes ont réussi.
+- publication uniquement après un lancement manuel explicite du workflow depuis `main`, si toutes les étapes précédentes ont réussi.
 
 ## Développement local
 
@@ -114,11 +144,29 @@ Pour la couche de récupération :
 
 ```bat
 cd recovery_v134
+go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd\recovery\rsrc --manifest cli --admin --product-version 1.0.34.0 --file-version 1.0.34.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
 gofmt -w cmd\recovery\main_windows.go
 go vet ./...
 go build -trimpath -ldflags="-s -w" -o ..\dist-release\update.exe .\cmd\recovery
 go build -trimpath -ldflags="-s -w -X main.defaultAction=rollback" -o ..\dist-release\rollback_1.33.exe .\cmd\recovery
 ```
+
+Pour installer localement les deux binaires construits, sans dépendre d'une release GitHub :
+
+```bat
+outils\update.bat --local "dist-release\NovaBlock.exe" "dist-release\update.exe"
+```
+
+Le mode local calcule et vérifie ses propres empreintes, utilise le même arrêt volontaire et exécute les mêmes contrôles finaux que le mode GitHub.
+
+### Validation réelle avant publication
+
+La candidate n'est publiable qu'après validation de tous les points suivants sur Windows :
+
+- lancement manuel dans la session utilisateur avec fenêtre, zone de notification et popup ;
+- blocage effectif, DNS familial IPv4/IPv6 et Internet bénin toujours disponible ;
+- récupération automatique v5 sans modification du DNS dans le chemin rapide ;
+- démarrage automatique après un redémarrage Windows complet, sans instance UI en session 0 ni ancien composant concurrent.
 
 ## Limites
 
