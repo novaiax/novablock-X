@@ -1,34 +1,45 @@
-## NovaBlock v1.0.33 : fermer uniquement l'onglet qui a déclenché le popup
+# NovaBlock v1.0.34 - récupération v5
 
-### Correctif principal
+Cette release finalise sur GitHub l'architecture v5 validée en test réel, tout en gardant le cœur applicatif v1.0.33 comme socle sain.
 
-Le comportement du bouton du popup est maintenant strict :
+## Ce qui change
 
-- L'apparition du popup ne ferme plus aucun onglet automatiquement.
-- NovaBlock mémorise la fenêtre navigateur (`HWND`) qui a déclenché le popup.
-- Quand tu cliques sur `Fermer l'onglet`, NovaBlock masque le popup, redonne le focus à cette fenêtre précise et envoie exactement un `Ctrl+F4`.
-- Le popup se ferme ensuite.
-- Le fallback qui pouvait tuer tout le processus Chrome/Edge/Firefox a été supprimé.
-- En cas d'échec de fermeture de l'onglet, NovaBlock n'escalade jamais vers la fermeture complète du navigateur.
+- Ajout d'une couche de récupération Windows autonome, séparée du cœur Python.
+- Détection très rapide de la disparition de l'application principale.
+- Fermeture immédiate des navigateurs via API Windows pour supprimer la fenêtre interactive exploitable.
+- Protection réseau fail-closed et relance de l'application lancées en parallèle.
+- Courte suppression répétée des navigateurs pendant la transition.
+- Libération de la protection réseau seulement après retour stable de l'application principale.
+- Heartbeat dédié pour vérifier que le mécanisme de récupération est réellement actif après installation.
+- Nettoyage des anciennes expérimentations v1.0.34 lors de l'installation/réparation.
 
-### Comportement attendu
+## Test réel de référence
 
-`navigation vers un site surveillé → popup → clic Fermer l'onglet → Ctrl+F4 sur la fenêtre qui a déclenché → seul l'onglet actif ciblé est fermé → les autres onglets restent ouverts`.
+Sur la machine de test ayant validé la v5, une fermeture forcée de l'application principale a été suivie d'un retour observé en moins d'une seconde. Il n'était plus possible de profiter de l'intervalle pour commencer à naviguer ou lancer un téléchargement avant le retour de NovaBlock.
 
-### Conservé de v1.0.32
+Ce chiffre est une observation sur cette machine, pas une garantie universelle de latence sur tous les PC Windows.
 
-- Sites personnels = popup uniquement après navigation réellement engagée.
-- Aucun popup pendant la saisie dans la barre d'adresse ou parce qu'une adresse apparaît dans une page.
-- `movix.cash` exclu des sites personnels surveillés.
-- Faux positif `pro` supprimé.
-- Interface principale compacte et fixe.
-- Sites adultes de base toujours protégés par DNS/hosts/policies + monitor en secours.
-- Updater robuste contre les fichiers `NovaBlock.exe` temporairement verrouillés.
+## Important : le chemin rapide ne touche plus au DNS
 
-### Inchangé
+La récupération v5 ne réinitialise ni DNS, ni carte réseau, ni service DNS Windows, ni fichier hosts. Elle se limite au fail-closed temporaire, à la fermeture des navigateurs et à la relance.
 
-Aucun nouvel email n'est envoyé. Le code, la rotation silencieuse, le cooldown de désinstallation, le watchdog et la relance automatique restent inchangés.
+Cela évite de réintroduire la régression des anciennes variantes v1.0.34 qui pouvaient laisser Internet indisponible plusieurs minutes.
 
-### Validation
+## Mise à jour et rollback
 
-La release est publiée uniquement après réussite de tous les tests `test_*.py`, compilation du vrai `NovaBlock.exe` sous Windows et autotest runtime du binaire compilé.
+- `update.bat` télécharge maintenant l'application principale et la couche de récupération, vérifie les SHA-256, installe les deux, relance NovaBlock et contrôle les heartbeats.
+- `update.exe` peut installer/réparer la couche v1.0.34 et son état réseau.
+- `rollback_1.33.exe` retire uniquement la couche v1.0.34 et relance le socle v1.0.33 sans effacer la configuration.
+
+## Outils de secours mis en cohérence
+
+- `EMERGENCY_RESET` suspend proprement la couche de récupération avant son nettoyage de dernier recours.
+- `REACTIVATE` réactive le pare-feu, les tâches, NovaBlock et la couche de récupération v1.0.34.
+- `REPARE_INTERNET` sait désormais réparer un éventuel état fail-closed résiduel sans refaire le chemin réseau lourd.
+- `LISEZ-MOI.txt` documente les nouveaux exécutables et leur rôle.
+
+## Validation CI
+
+La release n'est publiée que si les tests Python, l'autotest PyInstaller, les contrôles `gofmt`/`go vet`, la compilation Windows x64 des deux exécutables de récupération et les tests de cohérence release/outils réussissent.
+
+Les empreintes officielles des binaires publiés se trouvent dans `SHA256SUMS.txt` de la release.

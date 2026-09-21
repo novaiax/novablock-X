@@ -1,45 +1,47 @@
-NovaBlock - Outils de secours
-=============================
+NovaBlock v1.0.34 - Outils de secours
+=====================================
 
-IMPORTANT : garde tous ces fichiers DANS LE MEME DOSSIER.
-Chaque .bat appelle le .ps1 du meme nom, place juste a cote de lui.
-Separe-les et ils ne marcheront plus.
+IMPORTANT : garde les fichiers du ZIP ensemble. Les .bat appellent les .ps1
+places a cote d'eux, et les outils v1.0.34 utilisent update.exe pour verifier
+ou reparer le mecanisme de recuperation.
 
-Double-clic sur le .bat voulu. Il demande les droits admin tout seul.
+Double-clic sur le .bat correspondant. Les droits administrateur sont demandes
+quand ils sont necessaires.
 
+EMERGENCY_RESET.bat / .ps1
+    Dernier recours lorsque NovaBlock ou le reseau est dans un etat inutilisable.
+    La procedure garde sa friction volontaire : fenetre horaire + code aleatoire
+    de 30 caracteres a retaper manuellement. La v1.0.34 suspend d'abord proprement
+    le mecanisme de recuperation avant le nettoyage.
 
-  EMERGENCY_RESET.bat   Desactive completement NovaBlock quand plus rien
-                        ne marche : plus d'internet, navigateur bloque.
+REACTIVATE.bat / .ps1
+    Remet NovaBlock en route apres un EMERGENCY_RESET. Reactive le pare-feu,
+    les taches, le coeur NovaBlock et repare/verifie aussi la recuperation v1.0.34.
 
-                        Ouvre une fenetre qui affiche un code aleatoire
-                        de 30 caracteres. Il faut le RETAPER A LA MAIN,
-                        caractere par caractere : le copier-coller est
-                        desactive. Le bouton reste inactif tant que la
-                        saisie n'est pas exacte.
+REPARE_INTERNET.ps1
+    Diagnostique un demarrage reseau lent, les anciennes regles dupliquees,
+    certaines migrations hosts coincees et les etats reseau residuels. En v1.0.34,
+    il verifie aussi qu'un etat fail-closed temporaire n'est pas reste bloque.
 
-                        C'est volontaire : un reset ne doit jamais partir
-                        sur un coup de tete. Le journal du script
-                        s'affiche en direct dans la fenetre.
+unstick_sockets.bat / .ps1
+    Repare certains navigateurs qui ne chargent plus alors que la connexion existe.
 
-  REACTIVATE.bat        Remet tout en route apres un EMERGENCY_RESET.
-                        A lancer des que le probleme est regle.
-                        Verifie chaque etape et dit ce qui a echoue.
+whitelist_site.bat / .ps1
+    Debloque un site legitime mal classe par le filtrage familial.
 
-  REPARE_INTERNET.ps1   Repare un demarrage reseau lent : regles pare-feu
-                        dupliquees, migration hosts coincee, reglages de
-                        carte reseau. Clic droit > Executer avec PowerShell.
+MESURE_BOOT.ps1
+    Mesure le temps entre le demarrage de Windows et la disponibilite du reseau.
 
-  unstick_sockets.bat   Repare les navigateurs qui ne chargent plus rien
-                        alors que la connexion fonctionne.
+update.bat
+    Met a jour NovaBlock depuis GitHub, verifie les SHA-256, remplace le coeur,
+    installe/repare la couche v1.0.34 puis controle les heartbeats.
 
-  whitelist_site.bat    Debloque un site legitime mal classe comme adulte
-                        par le DNS familial.
+update.exe
+    Installe/repare la couche de recuperation v1.0.34. Il est aussi utilise par
+    REACTIVATE et REPARE_INTERNET.
 
-  update.bat            Met NovaBlock a jour depuis GitHub. Trouve tout
-                        seul l'endroit ou NovaBlock est installe.
-
-  MESURE_BOOT.ps1       Mesure le temps entre le demarrage du PC et
-                        l'acces a internet.
-
+rollback_1.33.exe
+    Retire uniquement la couche v1.0.34 et relance le socle sain v1.0.33.
+    La configuration NovaBlock est conservee.
 
 Depot : https://github.com/novaiax/novablock-X
