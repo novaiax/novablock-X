@@ -1,4 +1,5 @@
 import ctypes
+import json
 import logging
 import os
 import shutil
@@ -629,46 +630,55 @@ def reset_dns() -> int:
     return n
 
 
-def _any_iface_has_dns(reg_path: str, dns_ip: str) -> bool:
-    import winreg
+def _active_dns_rows() -> list[dict] | None:
+    """Read effective DNS servers for every connected adapter, not stale NICs."""
+    script = (
+        "$rows=foreach($a in @(Get-NetAdapter | Where-Object Status -eq Up)){"
+        "$dns=@(Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex);"
+        "$v4=@($dns | Where-Object AddressFamily -eq 2 | ForEach-Object {$_.ServerAddresses});"
+        "$v6=@($dns | Where-Object AddressFamily -eq 23 | ForEach-Object {$_.ServerAddresses});"
+        "$binding=Get-NetAdapterBinding -Name $a.Name -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue;"
+        "[pscustomobject]@{name=$a.Name;v4=$v4;v6=$v6;"
+        "v6Enabled=if($binding){[bool]$binding.Enabled}else{$true}}};"
+        "ConvertTo-Json -InputObject @($rows) -Depth 4 -Compress"
+    )
+    code, output, error = _run(["powershell", "-NoProfile", "-Command", script], timeout=15)
+    if code != 0:
+        log.warning("Could not verify active DNS adapters: %s", error.strip())
+        return None
     try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, reg_path) as root:
-            n_subkeys, _, _ = winreg.QueryInfoKey(root)
-            for i in range(n_subkeys):
-                guid = winreg.EnumKey(root, i)
-                try:
-                    with winreg.OpenKey(root, guid) as ifkey:
-                        try:
-                            ns, _ = winreg.QueryValueEx(ifkey, "NameServer")
-                        except FileNotFoundError:
-                            ns = ""
-                        if ns and dns_ip in ns:
-                            return True
-                except OSError:
-                    continue
-        return False
-    except OSError:
-        # Cannot read registry — assume OK so we don't spam re-applies.
-        return True
+        rows = json.loads(output)
+        return rows if isinstance(rows, list) else [rows]
+    except (ValueError, TypeError):
+        log.warning("Could not parse active DNS adapter state")
+        return None
 
 
-def dns_is_locked() -> bool:
-    """Check if BOTH IPv4 and IPv6 DNS are locked to *any* family-safe provider
-    in DNS_FALLBACKS. Reads the registry directly (no PowerShell).
+def dns_is_locked() -> bool | None:
+    """Require family-only DNS on every active adapter and enabled IP stack.
 
-    Both stacks must be locked: if only IPv4 is locked, Windows prefers the
-    DHCPv6-assigned IPv6 DNS (often the router) which may be unstable and
-    breaks resolution. A half-locked state is treated as 'not locked' to
-    trigger a re-apply that fixes both."""
-    v4_root = r"SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces"
-    v6_root = r"SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces"
-    v4_ok = any(_any_iface_has_dns(v4_root, v4p) for _, v4p, _, _, _ in DNS_FALLBACKS)
-    # For v6, accept locked if any provider's v6 primary is present, OR if no
-    # provider with v6 is currently set — in that case Cloudflare v6 should
-    # be there.
-    v6_providers = [v6p for _, _, _, v6p, _ in DNS_FALLBACKS if v6p]
-    v6_ok = any(_any_iface_has_dns(v6_root, v6p) for v6p in v6_providers)
-    return v4_ok and v6_ok
+    None means the probe failed or no adapter is active; callers retry later
+    without rewriting DNS based on an unknown state.
+    """
+    rows = _active_dns_rows()
+    if not rows:
+        return None
+    family_v4 = {ip for _name, v4p, v4s, _v6p, _v6s in DNS_FALLBACKS
+                 for ip in (v4p, v4s) if ip}
+    family_v6 = {ip.lower() for _name, _v4p, _v4s, v6p, v6s in DNS_FALLBACKS
+                 for ip in (v6p, v6s) if ip}
+    for row in rows:
+        v4 = [str(ip).strip() for ip in row.get("v4", []) if ip]
+        v6 = [str(ip).strip().lower() for ip in row.get("v6", []) if ip]
+        if not v4 or any(ip not in family_v4 for ip in v4):
+            log.warning("Active adapter %s has non-family IPv4 DNS", row.get("name"))
+            return False
+        if row.get("v6Enabled", True) and (
+            not v6 or any(ip not in family_v6 for ip in v6)
+        ):
+            log.warning("Active adapter %s has non-family IPv6 DNS", row.get("name"))
+            return False
+    return True
 
 
 def apply_full_block(kill_browsers: bool = True) -> dict:
@@ -686,11 +696,15 @@ def apply_full_block(kill_browsers: bool = True) -> dict:
     # Only touch DNS if it's actually not locked. Re-applying when it's already
     # correct wastes time and (worse) risks leaving the interface mid-config
     # if `netsh` times out under load (OBS streaming, heavy disk I/O, etc.).
-    if dns_is_locked():
+    dns_state = dns_is_locked()
+    if dns_state is True:
         n_dns = 0
         log.debug("DNS already locked — skipping set_family_dns")
-    else:
+    elif dns_state is False:
         n_dns = set_family_dns()
+    else:
+        n_dns = 0
+        log.warning("DNS state unknown — leaving adapters unchanged until next check")
     pol = browser_policies.apply_all_browser_policies()
     n_fw = firewall.block_doh_endpoints()
     n_killed = browser_kill.kill_all_browsers() if kill_browsers else 0

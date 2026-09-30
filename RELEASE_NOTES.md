@@ -1,27 +1,22 @@
-# NovaBlock v1.0.35 — outils de secours et pare-feu DoH
+# NovaBlock v1.0.36 — mise à jour en un fichier et protections renforcées
 
-Cette version conserve les corrections de récupération et de démarrage de la v1.0.34. Elle remet les outils de secours dans l'archive officielle et traite les règles DoH dupliquées sur les installations anciennes.
+Cette version conserve les protections de la v1.0.35 et simplifie l'installation : l'utilisateur télécharge uniquement `update.bat`. Ce fichier demande lui-même l'UAC, télécharge et vérifie `NovaBlock.exe` et le composant de récupération, puis laisse la fenêtre ouverte avec son résultat et le chemin du journal.
 
-## Règles DoH pendant la mise à jour
+## Sites personnels et navigateurs
 
-- L'updater vérifie le jeu attendu de 78 règles avant de relancer NovaBlock.
-- Une installation saine avec 78 règles actives reste inchangée.
-- Si des doublons anciens sont présents, une sauvegarde du registre est créée, puis une règle de blocage valide est conservée pour chaque nom attendu. Le nettoyage s'arrête si une règle requise manque ou paraît invalide.
-- Le rapport indique le nombre de règles avant et après. Un redémarrage Windows recharge la politique pare-feu après nettoyage.
-- Pendant le fonctionnement normal, le watchdog contrôle désormais la présence des 78 règles et réinstalle immédiatement une règle manquante.
+- Les 17 sites popup par défaut sont désormais ajoutés une seule fois aux installations existantes lors du redémarrage de NovaBlock après l'update. Les entrées personnelles déjà configurées sont conservées ; Reddit reste hors de cette liste.
+- UC Browser est traité comme navigateur non vérifié : NovaBlock détecte ses processus connus et son emplacement d'installation, le ferme localement et affiche un popup explicatif tant que le filtre ne peut pas y être garanti. Le watchdog répète ce contrôle pendant le fonctionnement normal.
 
-## Sites personnels à la première installation
+## DNS familial et pare-feu
 
-Les 17 domaines personnels configurés sur la machine de référence sont maintenant ajoutés automatiquement lors d'une nouvelle installation. Reddit est exclu de cette liste popup par défaut ; son filtrage NSFW séparé reste en place. La liste personnelle déjà stockée sur les machines installées n'est pas remplacée.
+- La vérification DNS lit les serveurs effectifs de **chaque interface réseau active**. Un ancien adaptateur configuré correctement ne peut plus masquer une interface Wi-Fi utilisant un DNS non familial.
+- Un serveur secondaire non familial ou un IPv6 non familial est également détecté. Si le contrôle est indisponible, l'état est signalé comme inconnu et le prochain contrôle réessaie sans modifier aveuglément le réseau.
+- L'updater vérifie les 78 règles DoH et leur nombre avant de relancer l'application. Il conserve le nettoyage ciblé des anciens doublons et indique quand un redémarrage Windows est nécessaire.
 
 ## Outils de secours
 
-- `EMERGENCY_RESET` conserve l'UAC, la vérification de l'heure de Paris, la plage bloquée de 19 h à 6 h et les journaux. Le défi manuel passe à 200 caractères ; la couche de récupération récente est prise en compte après réussite du défi.
-- `REACTIVATE` rétablit le cœur, les tâches, les protections réseau et la récupération v1.0.35.
-- `REPARE_INTERNET` vérifie la récupération et utilise le nettoyage ciblé des règles DoH.
-- `unstick_sockets`, `whitelist_site`, `MESURE_BOOT`, `update.bat` et leur documentation sont inclus dans `NovaBlock-Outils.zip`.
-- `SHA256SUMS.txt` contient les empreintes des deux exécutables, de l'updater et de l'archive d'outils.
+`NovaBlock-Outils.zip` conserve les outils de secours de la v1.0.35, dont `EMERGENCY_RESET` avec UAC, défi manuel de 200 caractères, plage horaire et journal. L'updater n'a plus besoin d'un script d'élévation séparé.
 
-## Publication
+## Validation
 
-Le workflow Windows exécute les tests Python, les contrôles Go, la compilation et l'autotest du binaire empaqueté. La release est publiée seulement par un déclenchement manuel depuis `main` après réussite de ces étapes.
+Le workflow Windows exécute les tests Python, l'analyse des scripts PowerShell, les contrôles Go, la compilation et l'autotest du binaire empaqueté avant la publication manuelle depuis `main`.

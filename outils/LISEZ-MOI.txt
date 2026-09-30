@@ -1,16 +1,17 @@
-NovaBlock v1.0.35 - Outils de secours et mise a jour
+NovaBlock v1.0.36 - Outils de secours et mise a jour
 ====================================================
 
 Garde les fichiers de cette archive dans le meme dossier. Les fichiers .bat
 appellent les scripts .ps1 places a cote d'eux. Les droits administrateur sont
 demandes quand ils sont necessaires.
 
-update.bat / elevate_update.ps1
-    Telecharge la derniere release officielle, verifie les empreintes SHA-256,
+update.bat
+    Fichier autonome a telecharger pour la mise a jour. Demande l'UAC,
+    telecharge la derniere release officielle, verifie les empreintes SHA-256,
     installe l'application et repare la couche de recuperation.
 
 update.exe
-    Installe ou repare la couche de recuperation v1.0.35. Son etat peut etre
+    Installe ou repare la couche de recuperation v1.0.36. Son etat peut etre
     verifie apres l'installation.
 
 EMERGENCY_RESET.bat / EMERGENCY_RESET.ps1

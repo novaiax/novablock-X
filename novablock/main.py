@@ -415,6 +415,12 @@ def main() -> int:
         log.info("Another NovaBlock instance is already running")
         return 0
     try:
+        try:
+            added = config.ensure_default_popup_sites()
+            if added:
+                log.info("Added %d missing default popup sites to existing installation", added)
+        except Exception:
+            log.exception("Could not seed default popup sites")
         run_app()
     finally:
         single_instance.release()

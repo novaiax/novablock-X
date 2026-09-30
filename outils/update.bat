@@ -1,21 +1,36 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal DisableDelayedExpansion
 
 REM ============================================================
 REM NovaBlock - update complet depuis la derniere release GitHub
-REM v1.0.35 : coeur + recuperation + verification SHA256 + dedup DoH
+REM v1.0.36 : updater autonome, coeur + recuperation + SHA256 + dedup DoH
 REM ============================================================
 
 net session >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [INFO] Relance en administrateur...
-    if /I "%~1"=="--local" (
-        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0elevate_update.ps1" -ScriptPath "%~f0" -LocalApp "%~f2" -LocalRecovery "%~f3"
-    ) else (
-        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0elevate_update.ps1" -ScriptPath "%~f0"
-    )
-    exit /b !errorlevel!
+if errorlevel 1 goto :elevate
+goto :admin
+
+:elevate
+echo [INFO] Demande des droits administrateur...
+set "NB_UPDATER_SCRIPT=%~f0"
+set "NB_UPDATER_LOCAL_MODE=0"
+set "NB_UPDATER_LOCAL_APP="
+set "NB_UPDATER_LOCAL_RECOVERY="
+if /I not "%~1"=="--local" goto :elevate_run
+set "NB_UPDATER_LOCAL_MODE=1"
+set "NB_UPDATER_LOCAL_APP=%~f2"
+set "NB_UPDATER_LOCAL_RECOVERY=%~f3"
+:elevate_run
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { $q=[string][char]39; $quote={param([string]$v) $q+$v.Replace($q,$q+$q)+$q}; $parts=@('&',(& $quote ([IO.Path]::GetFullPath($env:NB_UPDATER_SCRIPT)))); if($env:NB_UPDATER_LOCAL_MODE -eq '1'){if(-not $env:NB_UPDATER_LOCAL_APP -or -not $env:NB_UPDATER_LOCAL_RECOVERY){throw 'Les deux artefacts locaux sont requis'}; $parts+=(& $quote '--local'); $parts+=(& $quote ([IO.Path]::GetFullPath($env:NB_UPDATER_LOCAL_APP))); $parts+=(& $quote ([IO.Path]::GetFullPath($env:NB_UPDATER_LOCAL_RECOVERY)))}; $body=($parts -join ' ')+[Environment]::NewLine+'exit $LASTEXITCODE'; $encoded=[Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($body)); $ps=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'; Start-Process -FilePath $ps -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded) -Verb RunAs -ErrorAction Stop | Out-Null; exit 0 } catch { Write-Error ('Elevation impossible : '+$_.Exception.Message); exit 1 }"
+set "NB_ELEVATION_RESULT=%errorlevel%"
+if not "%NB_ELEVATION_RESULT%"=="0" (
+    echo [ERROR] L'eleveration a echoue. Aucun fichier NovaBlock n'a ete modifie.
+    pause
 )
+exit /b %NB_ELEVATION_RESULT%
+
+:admin
+setlocal EnableDelayedExpansion
 
 echo ============================================================
 echo NovaBlock - Mise a jour depuis GitHub
@@ -27,7 +42,7 @@ set "LOCK_FILE=%LOCK_DIR%\update.lock"
 set "SENTINEL=%LOCK_DIR%\shutdown.sentinel"
 set "STALE_AFTER=1800"
 set "BASE_URL=https://github.com/novaiax/novablock-X/releases/latest/download"
-set "RECOVERY_TMP=%TEMP%\NovaBlock-update-v135.exe"
+set "RECOVERY_TMP=%TEMP%\NovaBlock-update-v136.exe"
 set "SUMS_TMP=%TEMP%\NovaBlock-SHA256SUMS.txt"
 set "LOCAL_MODE=0"
 set "CORE_SWAPPED=0"
@@ -169,14 +184,14 @@ if errorlevel 1 (
     for /f %%r in ('powershell -NoProfile -Command "$r=Get-Content -LiteralPath '%LOCK_DIR%\firewall-repair-report.json' -Raw | ConvertFrom-Json; if($r.reboot_required){1}else{0}"') do set "FIREWALL_REBOOT=%%r"
 )
 
-REM ----- 6. Installer/reparer la couche v1.0.35 -----
-echo [6/8] Installation/reparation de la recuperation v1.0.35...
+REM ----- 6. Installer/reparer la couche v1.0.36 -----
+echo [6/8] Installation/reparation de la recuperation v1.0.36...
 "%RECOVERY_TMP%" --repair
 if errorlevel 1 (
     echo   [ERROR] La couche de recuperation n'a pas passe son controle de sante.
     goto :cleanup_fail
 )
-echo   [OK] Recuperation v1.0.35 active.
+echo   [OK] Recuperation v1.0.36 active.
 
 REM ----- 7. Relancer le coeur dans la session interactive -----
 echo [7/8] Relance interactive de NovaBlock...
@@ -217,7 +232,8 @@ set /a HEALTH=0
 set /a HEALTH+=FIREWALL_REPAIR_ERROR
 set /a DNS_WAITED=0
 :wait_family_dns
-for /f %%d in ('powershell -NoProfile -Command "$v4=@('1.1.1.3','1.0.0.3','185.228.168.168','185.228.169.168','208.67.222.123','208.67.220.123'); $v6=@('2606:4700:4700::1113','2606:4700:4700::1003','2a0d:2a00:1::','2a0d:2a00:2::'); $s=(Get-DnsClientServerAddress -ErrorAction SilentlyContinue).ServerAddresses; $h4=$false; $h6=$false; foreach($a in $s){if($v4 -contains $a){$h4=$true}; if($v6 -contains $a){$h6=$true}}; if($h4 -and $h6){0}else{1}"') do set DNS_FAMILY_ERROR=%%d
+set "DNS_FAMILY_ERROR=1"
+for /f %%d in ('powershell -NoProfile -Command "$v4=@('1.1.1.3','1.0.0.3','185.228.168.168','185.228.169.168','208.67.222.123','208.67.220.123');$v6=@('2606:4700:4700::1113','2606:4700:4700::1003','2a0d:2a00:1::','2a0d:2a00:2::');try{$count=0;$ok=$true;foreach($a in (Get-NetAdapter)) {if($a.Status -ne 'Up'){continue};$count++;$d4=@();$d6=@();foreach($entry in (Get-DnsClientServerAddress -InterfaceIndex $a.ifIndex)) {if($entry.AddressFamily -eq 2){$d4+=@($entry.ServerAddresses)}elseif($entry.AddressFamily -eq 23){$d6+=@($entry.ServerAddresses)}};if($d4.Count -eq 0){$ok=$false};foreach($ip in $d4){if($v4 -notcontains $ip){$ok=$false}};$binding=Get-NetAdapterBinding -Name $a.Name -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue;if(-not $binding -or $binding.Enabled){if($d6.Count -eq 0){$ok=$false};foreach($ip in $d6){if($v6 -notcontains $ip){$ok=$false}}}};if($count -eq 0){$ok=$false};if($ok){0}else{1}}catch{1}"') do set DNS_FAMILY_ERROR=%%d
 if "!DNS_FAMILY_ERROR!"=="0" goto :family_dns_ok
 if !DNS_WAITED! geq 20 goto :family_dns_failed
 timeout /t 2 /nobreak >nul
@@ -250,9 +266,9 @@ if not "!HTTPS_ERROR!"=="0" (
 
 "%RECOVERY_TMP%" --status >nul 2>&1
 if errorlevel 1 (
-    echo   [PROBLEME] Recuperation v1.0.35 non saine.
+    echo   [PROBLEME] Recuperation v1.0.36 non saine.
     set /a HEALTH+=1
-) else echo   [OK] Recuperation v1.0.35 saine
+) else echo   [OK] Recuperation v1.0.36 saine
 
 tasklist /FI "IMAGENAME eq NovaBlock.exe" /NH 2>nul | find /I "NovaBlock.exe" >nul
 if errorlevel 1 (
@@ -272,8 +288,9 @@ if !HEALTH! equ 0 (
 )
 echo Configuration conservee dans %PROGRAMDATA%\NovaBlock.
 if "%FIREWALL_REBOOT%"=="1" echo Un redemarrage Windows est necessaire pour recharger le pare-feu nettoye.
+echo Journal : %LOCK_DIR%\update-launch.log
 echo ============================================================
-timeout /t 3 /nobreak >nul
+pause
 exit /b !HEALTH!
 
 :download
@@ -314,5 +331,7 @@ del /F /Q "%RECOVERY_TMP%" "%SUMS_TMP%" >nul 2>&1
 echo.
 echo ============================================================
 echo Mise a jour interrompue proprement. L'installation precedente a ete rearmee.
+echo Journal : %LOCK_DIR%\update-launch.log
 echo ============================================================
+pause
 exit /b 1
