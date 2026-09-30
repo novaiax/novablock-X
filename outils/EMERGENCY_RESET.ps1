@@ -1,12 +1,11 @@
 # ============================================================
 # NovaBlock - EMERGENCY RESET (interface securisee)
 # ============================================================
-# Le reset lui-meme n a PAS change : sa logique est embarquee plus bas,
-# a l identique, dans $CORE_SCRIPT. Cette interface ajoute uniquement une
-# couche de friction devant, pour qu un reset ne parte jamais sur un coup
-# de tete :
+# La logique du reset est embarquee plus bas dans $CORE_SCRIPT. L'interface
+# garde une friction avant toute action, pour qu'un reset ne parte jamais
+# sur un coup de tete :
 #
-#   1. un code aleatoire de 30 caracteres est genere a chaque lancement
+#   1. un code aleatoire de 200 caracteres est genere a chaque lancement
 #   2. il faut le retaper a la main, caractere par caractere
 #   3. tout copier-coller est neutralise (clavier, menu contextuel, glisser)
 #   4. le bouton reste inactif tant que la saisie n est pas exacte
@@ -211,13 +210,11 @@ function Show-EcranBlocage($verdict) {
 
 
 # ============================================================
-# LOGIQUE DU RESET - INCHANGEE
+# LOGIQUE DU RESET APRES VALIDATION DU DEFI
 # ============================================================
-# Contenu repris octet pour octet du EMERGENCY_RESET.ps1 existant.
 # Le here-string ci-dessous est litteral : aucune variable n y est
-# interpretee, donc aucune commande n est alteree. Il est embarque ici
-# plutot que garde dans un fichier a cote, car un fichier separe se
-# lancerait directement et sauterait le defi des 30 caracteres.
+# interpretee. Il est embarque ici plutot que garde dans un fichier a cote,
+# car un fichier separe se lancerait directement et sauterait le defi.
 $CORE_SCRIPT = @'
 # ============================================================
 # NovaBlock - EMERGENCY RESET
@@ -230,10 +227,7 @@ $CORE_SCRIPT = @'
 # Designed to be portable: no hardcoded paths, uses %WINDIR% and
 # %PROGRAMDATA%, runs on any Windows install with NovaBlock.
 #
-# Two ways to run:
-#   1) Local: double-click EMERGENCY_RESET.bat (auto-elevates)
-#   2) Remote one-liner (PowerShell admin):
-#      iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/EMERGENCY_RESET.ps1)
+# Run from the protected EMERGENCY_RESET.bat interface after its challenge.
 # ============================================================
 
 $ErrorActionPreference = 'Continue'
@@ -245,12 +239,34 @@ $isAdmin = ([Security.Principal.WindowsPrincipal] `
     [Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
     Write-Host "This script needs admin rights." -ForegroundColor Red
-    Write-Host "Reopen PowerShell as Administrator and rerun:" -ForegroundColor Yellow
-    Write-Host "  iex (irm https://raw.githubusercontent.com/novaiax/novablock-X/main/EMERGENCY_RESET.ps1)" -ForegroundColor Cyan
+    Write-Host "Relance EMERGENCY_RESET.bat et accepte l'UAC." -ForegroundColor Yellow
     exit 1
 }
 
 Write-Host "=== EMERGENCY RESET ===" -ForegroundColor Yellow
+
+# Adapter le reset a la couche de recuperation recente. En cas d'echec,
+# on s'arrete avant de toucher au coeur pour eviter un etat partiel.
+Write-Host "[0] Suspension du mecanisme de recuperation..." -ForegroundColor Cyan
+$emergencyMarker = Join-Path "$env:ProgramData\NovaBlock" 'shutdown.sentinel'
+try {
+    [System.IO.File]::WriteAllText($emergencyMarker, [DateTimeOffset]::UtcNow.ToUnixTimeSeconds().ToString())
+} catch {
+    Write-Host "    ECHEC - marqueur de maintenance impossible a creer" -ForegroundColor Red
+    exit 1
+}
+$recoveryTool = Join-Path "$env:ProgramData\NovaBlock" 'runtime_7c31.exe'
+if (Test-Path $recoveryTool) {
+    & $recoveryTool --maintenance-pause
+    if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $emergencyMarker -Force -ErrorAction SilentlyContinue
+        Write-Host "    ECHEC - mise a jour ou reparation necessaire avant le reset" -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "    OK" -ForegroundColor Green
+} else {
+    Write-Host "    Ancienne installation : aucune couche de recuperation distincte" -ForegroundColor DarkGray
+}
 
 # 1. Kill NovaBlock
 Write-Host "[1] Killing NovaBlock processes + tasks..." -ForegroundColor Cyan
@@ -415,7 +431,7 @@ Start-Sleep -Seconds 10
 '@
 
 
-# --- Generation du code : 30 caracteres, aleatoire cryptographique ---
+# --- Generation du code : 200 caracteres, aleatoire cryptographique ---
 # Au moins un caractere de chaque famille, puis melange Fisher-Yates
 # alimente par le meme generateur cryptographique.
 # Les caracteres ambigus (l/I/1, O/0) sont exclus : le code doit etre
@@ -442,7 +458,7 @@ function New-ChallengeCode {
     $chars.Add((& $tirer $majuscules))
     $chars.Add((& $tirer $chiffres))
     $chars.Add((& $tirer $speciaux))
-    while ($chars.Count -lt 30) { $chars.Add((& $tirer $toutes)) }
+    while ($chars.Count -lt 200) { $chars.Add((& $tirer $toutes)) }
 
     for ($i = $chars.Count - 1; $i -gt 0; $i--) {
         $b = New-Object byte[] 4
@@ -478,7 +494,7 @@ $AMBRE    = [System.Drawing.Color]::FromArgb(240, 190, 100)
 
 $form = New-Object System.Windows.Forms.Form
 $form.Text            = "NovaBlock - EMERGENCY RESET"
-$form.Size            = New-Object System.Drawing.Size(840, 760)
+$form.Size            = New-Object System.Drawing.Size(840, 810)
 $form.StartPosition   = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox     = $false
@@ -515,34 +531,35 @@ $null = Add-Lbl $bandeau "Desactive completement NovaBlock : pare-feu, DNS, bloc
 
 # --- Etape 1 ---
 $null = Add-Lbl $form "ETAPE 1   Recopie ce code a la main" 28 106 500 22 10 $true $AMBRE
-$null = Add-Lbl $form "Le copier-coller est desactive. Les caracteres ambigus sont exclus du code." 28 128 760 18 8 $false $DISCRET
+$null = Add-Lbl $form "Saisis les 4 lignes d'affilee, sans espace ni retour. Copier-coller desactive." 28 128 760 18 8 $false $DISCRET
 
 $carteCode = New-Object System.Windows.Forms.Panel
 $carteCode.Location  = New-Object System.Drawing.Point(28, 152)
-$carteCode.Size      = New-Object System.Drawing.Size(780, 60)
+$carteCode.Size      = New-Object System.Drawing.Size(780, 110)
 $carteCode.BackColor = $CHAMP
 $form.Controls.Add($carteCode)
 
 # Un Label ne permet ni selection ni copie, contrairement a un champ texte.
 $lblCode = New-Object System.Windows.Forms.Label
-$lblCode.Text      = $script:CODE
-$lblCode.Font      = New-Object System.Drawing.Font("Consolas", 16, [System.Drawing.FontStyle]::Bold)
+$codeLines = for ($i = 0; $i -lt 4; $i++) { $script:CODE.Substring($i * 50, 50) }
+$lblCode.Text      = $codeLines -join [Environment]::NewLine
+$lblCode.Font      = New-Object System.Drawing.Font("Consolas", 11, [System.Drawing.FontStyle]::Bold)
 $lblCode.ForeColor = $VERT
 $lblCode.BackColor = [System.Drawing.Color]::Transparent
 $lblCode.TextAlign = 'MiddleCenter'
 $lblCode.Location  = New-Object System.Drawing.Point(0, 0)
-$lblCode.Size      = New-Object System.Drawing.Size(780, 60)
+$lblCode.Size      = New-Object System.Drawing.Size(780, 110)
 $carteCode.Controls.Add($lblCode)
 
 $saisie = New-Object System.Windows.Forms.TextBox
 $saisie.Font        = New-Object System.Drawing.Font("Consolas", 16, [System.Drawing.FontStyle]::Bold)
-$saisie.Location    = New-Object System.Drawing.Point(28, 222)
+$saisie.Location    = New-Object System.Drawing.Point(28, 272)
 $saisie.Size        = New-Object System.Drawing.Size(780, 42)
 $saisie.BackColor   = $CHAMP
 $saisie.ForeColor   = $TEXTE
 $saisie.BorderStyle = 'FixedSingle'
 $saisie.TextAlign   = 'Center'
-$saisie.MaxLength   = 30
+$saisie.MaxLength   = 200
 # ShortcutsEnabled a false neutralise Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+Z,
 # Ctrl+Inser et Maj+Inser dans un TextBox WinForms.
 $saisie.ShortcutsEnabled = $false
@@ -552,22 +569,22 @@ $saisie.AllowDrop = $false
 $form.Controls.Add($saisie)
 
 $jauge = New-Object System.Windows.Forms.ProgressBar
-$jauge.Location = New-Object System.Drawing.Point(28, 272)
+$jauge.Location = New-Object System.Drawing.Point(28, 322)
 $jauge.Size     = New-Object System.Drawing.Size(780, 6)
 $jauge.Minimum  = 0
-$jauge.Maximum  = 30
+$jauge.Maximum  = 200
 $jauge.Style    = 'Continuous'
 $form.Controls.Add($jauge)
 
-$etat = Add-Lbl $form "0 / 30 caracteres" 28 284 780 20 9 $false $DISCRET
+$etat = Add-Lbl $form "0 / 200 caracteres" 28 334 780 20 9 $false $DISCRET
 
 # --- Etape 2 ---
-$null = Add-Lbl $form "ETAPE 2   Lance le reset" 28 316 500 22 10 $true $AMBRE
+$null = Add-Lbl $form "ETAPE 2   Lance le reset" 28 366 500 22 10 $true $AMBRE
 
 $btn = New-Object System.Windows.Forms.Button
 $btn.Text      = "Lancer EMERGENCY_RESET"
 $btn.Font      = New-Object System.Drawing.Font("Segoe UI", 11, [System.Drawing.FontStyle]::Bold)
-$btn.Location  = New-Object System.Drawing.Point(28, 342)
+$btn.Location  = New-Object System.Drawing.Point(28, 392)
 $btn.Size      = New-Object System.Drawing.Size(780, 46)
 $btn.Enabled   = $false
 $btn.FlatStyle = 'Flat'
@@ -578,11 +595,11 @@ $btn.Cursor    = 'Hand'
 $form.Controls.Add($btn)
 
 # --- Journal ---
-$null = Add-Lbl $form "JOURNAL D EXECUTION" 28 404 500 20 9 $true $DISCRET
+$null = Add-Lbl $form "JOURNAL D EXECUTION" 28 454 500 20 9 $true $DISCRET
 
 $logs = New-Object System.Windows.Forms.RichTextBox
 $logs.Font        = New-Object System.Drawing.Font("Consolas", 9)
-$logs.Location    = New-Object System.Drawing.Point(28, 426)
+$logs.Location    = New-Object System.Drawing.Point(28, 476)
 $logs.Size        = New-Object System.Drawing.Size(780, 232)
 $logs.BackColor   = $CHAMP
 $logs.ForeColor   = $DISCRET
@@ -592,10 +609,10 @@ $logs.ScrollBars  = 'Vertical'
 $logs.Text        = "  En attente de la saisie du code..."
 $form.Controls.Add($logs)
 
-$final = Add-Lbl $form "" 28 668 780 30 12 $true $TEXTE
+$final = Add-Lbl $form "" 28 718 780 30 12 $true $TEXTE
 $final.TextAlign = 'MiddleCenter'
 
-$aide = Add-Lbl $form "Pour tout remettre en place ensuite : REACTIVATE.bat" 28 702 780 18 8 $false $DISCRET
+$aide = Add-Lbl $form "Pour tout remettre en place ensuite : REACTIVATE.bat" 28 752 780 18 8 $false $DISCRET
 $aide.TextAlign = 'MiddleCenter'
 
 # --- Blocage du collage, ceinture et bretelles ---
@@ -616,7 +633,7 @@ $saisie.Add_TextChanged({
     $t = $saisie.Text
     $bons = 0
     while ($bons -lt $t.Length -and $bons -lt $script:CODE.Length -and $t[$bons] -ceq $script:CODE[$bons]) { $bons++ }
-    $jauge.Value = [Math]::Min($bons, 30)
+    $jauge.Value = [Math]::Min($bons, 200)
 
     if ([string]::Equals($t, $script:CODE, [System.StringComparison]::Ordinal)) {
         $btn.Enabled    = $true
@@ -634,7 +651,7 @@ $saisie.Add_TextChanged({
 
     if ($t.Length -eq 0) {
         $saisie.ForeColor = $TEXTE
-        $etat.Text        = "0 / 30 caracteres"
+        $etat.Text        = "0 / 200 caracteres"
         $etat.ForeColor   = $DISCRET
     } elseif ($bons -lt $t.Length) {
         $saisie.ForeColor = $ROUGE
@@ -642,7 +659,7 @@ $saisie.Add_TextChanged({
         $etat.ForeColor   = $ROUGE
     } else {
         $saisie.ForeColor = $TEXTE
-        $etat.Text        = "$($t.Length) / 30 caracteres - continue"
+        $etat.Text        = "$($t.Length) / 200 caracteres - continue"
         $etat.ForeColor   = $DISCRET
     }
 })
@@ -691,6 +708,15 @@ $timer.Add_Tick({
 })
 
 $btn.Add_Click({
+    if (-not [string]::Equals($saisie.Text, $script:CODE, [System.StringComparison]::Ordinal)) {
+        return
+    }
+    $verdict = Test-FenetreBloquee
+    if ($verdict.Bloque) {
+        $form.Close()
+        Show-EcranBlocage $verdict
+        return
+    }
     $btn.Enabled      = $false
     $saisie.Enabled   = $false
     $saisie.Text      = ""
@@ -699,7 +725,7 @@ $btn.Add_Click({
     $btn.BackColor    = $CARTE
     $btn.ForeColor    = $DISCRET
     $etat.Text        = ""
-    $jauge.Value      = 30
+    $jauge.Value      = 200
     $logs.Clear()
     $logs.ForeColor   = $TEXTE
     $final.Text       = ""
@@ -710,6 +736,7 @@ $btn.Add_Click({
     $script:logFile    = Join-Path $env:TEMP ("nb_reset_{0}.log" -f ([guid]::NewGuid().ToString('N')))
     Set-Content -Path $script:tempScript -Value $CORE_SCRIPT -Encoding UTF8
     $script:position = 0
+    $logs.Text = "  Journal conserve : $script:logFile`r`n"
 
     $a = '/c powershell.exe -NoProfile -ExecutionPolicy Bypass -File "{0}" > "{1}" 2>&1' -f $script:tempScript, $script:logFile
     $script:proc = Start-Process -FilePath 'cmd.exe' -ArgumentList $a -WindowStyle Hidden -PassThru

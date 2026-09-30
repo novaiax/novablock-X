@@ -53,6 +53,20 @@ foreach ($f in @('shutdown.sentinel','update.lock')) {
     }
 }
 
+# --- 0b. Verifier le retour du reseau de la recuperation recente ---
+Titre "0b. Etat temporaire de recuperation"
+$recoveryTool = Join-Path "$env:ProgramData\NovaBlock" 'runtime_7c31.exe'
+if (Test-Path $recoveryTool) {
+    & $recoveryTool --repair-network | Out-Null
+    if ($LASTEXITCODE -eq 0) { OK "etat temporaire coherent" }
+    else {
+        Souci "la recuperation n'a pas confirme le retour du reseau"
+        Info "  -> Lance REACTIVATE.bat si NovaBlock principal ne tourne pas."
+    }
+} else {
+    Info "Couche de recuperation distincte absente - verification ignoree."
+}
+
 # --- 1. Etat du dernier demarrage ---
 Titre "1. Dernier demarrage"
 $boot = (Get-CimInstance Win32_OperatingSystem).LastBootUpTime
@@ -176,51 +190,28 @@ foreach ($l in @('Microsoft-Windows-NDIS/Operational',
     if ($LASTEXITCODE -eq 0) { OK "$l active" } else { Souci "$l : echec" }
 }
 
-# --- 5b. Regles pare-feu dupliquees (LA cause dominante) ---
-Titre "5b. Regles pare-feu NovaBlock dupliquees"
-# NovaBlock doit avoir 78 regles DoH. Un bug de comptage les a laissees se
-# dupliquer ~1200 fois chacune sur une machine : 93723 regles au lieu de 78.
-# Le service pare-feu doit toutes les charger au demarrage, ce qui gele la
-# pile reseau et laisse le reseau sur "Identification" pendant des minutes.
-# netsh (84 s par nom) et COM Remove (1183 ms par regle) sont inutilisables
-# a cette echelle car chaque appel recharge toute la politique. On passe donc
-# par le registre, qui fait le meme travail en quelques secondes.
-$sub = 'SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules'
-try {
-    $k = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($sub, $false)
-    $doublons = New-Object System.Collections.Generic.List[string]
-    $garder = 0
-    foreach ($n in $k.GetValueNames()) {
-        if ([string]$k.GetValue($n) -match 'Name=NovaBlock_DoH_') { $doublons.Add($n) } else { $garder++ }
-    }
-    $k.Close()
-    Info "Regles NovaBlock : $($doublons.Count)   |   autres regles : $garder"
-
-    if ($doublons.Count -le 200) {
-        OK "Nombre normal - rien a nettoyer"
-    } elseif ($garder -lt 20) {
-        Souci "Trop peu de regles a conserver ($garder) - anomalie, nettoyage annule"
-    } else {
-        Souci "$($doublons.Count) regles au lieu de 78 - c'est ce qui ralentit le demarrage"
-        $bak = Join-Path $env:TEMP ("FirewallRules-backup-{0}.reg" -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
-        & reg.exe export "HKLM\$sub" $bak /y 2>&1 | Out-Null
-        if (Test-Path $bak) {
-            Info "Sauvegarde : $bak"
-            $sw = [Diagnostics.Stopwatch]::StartNew()
-            $kw = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey($sub, $true)
-            $del = 0
-            foreach ($n in $doublons) { try { $kw.DeleteValue($n, $false); $del++ } catch { } }
-            $kw.Close()
-            $sw.Stop()
-            OK "$del regles supprimees en $([int]$sw.Elapsed.TotalMilliseconds) ms"
-            Info "Le pare-feu rechargera le registre propre au prochain demarrage."
-            Info "NovaBlock recreera ses 78 regles tout seul - la protection reste entiere."
+# --- 5b. Reparation ciblee des doublons tout en conservant 78 blocs ---
+Titre "5b. Regles pare-feu NovaBlock"
+if (Test-Path $exe) {
+    try {
+        $process = Start-Process -FilePath $exe -ArgumentList '--repair-firewall' `
+            -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+        $reportPath = Join-Path $nbDir 'firewall-repair-report.json'
+        if ($process.ExitCode -ne 0 -or -not (Test-Path $reportPath)) {
+            Souci "verification des 78 regles non confirmee; aucune suppression globale"
         } else {
-            Souci "Sauvegarde impossible - nettoyage annule par securite"
+            $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+            OK ("Regles DoH : {0} -> {1}; doublons retires : {2}" -f `
+                $report.before, $report.after, $report.removed)
+            if ($report.reboot_required) {
+                Info "Un redemarrage Windows rechargera la politique pare-feu nettoyee."
+            }
         }
+    } catch {
+        Souci "controle pare-feu impossible : $($_.Exception.Message)"
     }
-} catch {
-    Souci "Lecture du registre pare-feu impossible : $($_.Exception.Message)"
+} else {
+    Souci "NovaBlock.exe introuvable : controle pare-feu ignore"
 }
 
 # --- 6. Vitesse DNS ---

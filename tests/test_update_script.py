@@ -61,6 +61,12 @@ class UpdateScriptTests(unittest.TestCase):
         self.assertNotIn("gethostaddresses('www.google.com')^|out-null", self.text)
         self.assertIn('https://example.com', self.text)
 
+    def test_update_repairs_duplicate_firewall_rules_before_relaunch(self):
+        self.assertIn('start "" /wait "%install_path%" --repair-firewall', self.text)
+        self.assertIn('firewall-repair-report.json', self.text)
+        self.assertIn('firewall_repair_error', self.text)
+        self.assertIn('firewall_reboot', self.text)
+
 
 if __name__ == '__main__':
     unittest.main()

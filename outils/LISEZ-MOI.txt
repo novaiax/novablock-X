@@ -1,5 +1,5 @@
-NovaBlock v1.0.34 - Mise a jour et reactivation
-===============================================
+NovaBlock v1.0.35 - Outils de secours et mise a jour
+====================================================
 
 Garde les fichiers de cette archive dans le meme dossier. Les fichiers .bat
 appellent les scripts .ps1 places a cote d'eux. Les droits administrateur sont
@@ -10,12 +10,27 @@ update.bat / elevate_update.ps1
     installe l'application et repare la couche de recuperation.
 
 update.exe
-    Installe ou repare la couche de recuperation v1.0.34. Son etat peut etre
+    Installe ou repare la couche de recuperation v1.0.35. Son etat peut etre
     verifie apres l'installation.
+
+EMERGENCY_RESET.bat / EMERGENCY_RESET.ps1
+    Dernier recours lorsque NovaBlock ou le reseau est inutilisable.
+    Necessite l'UAC, une saisie manuelle de 200 caracteres et une heure
+    verifiee hors de la plage 19 h - 6 h (Paris). Affiche et conserve le journal.
 
 REACTIVATE.bat / REACTIVATE.ps1
     Verifie et remet en route les protections, la tache interactive et le
     mecanisme de recuperation.
+
+REPARE_INTERNET.ps1
+    Diagnostique les problemes reseau, controle les 78 regles DoH et repare
+    les doublons en gardant une regle active par nom.
+
+unstick_sockets.bat / unstick_sockets.ps1
+    Repare une pile reseau ou des navigateurs bloques et retablit NovaBlock.
+
+whitelist_site.bat / whitelist_site.ps1
+    Traite les sites legitimes bloques par erreur par le DNS familial.
 
 MESURE_BOOT.ps1
     Mesure le delai entre le demarrage de Windows et la disponibilite du reseau.

@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	releaseVersion = "v1.0.34"
+	releaseVersion = "v1.0.35"
 
 	// Internal identifiers are intentionally kept out of user-facing docs.
 	serviceName   = "AegisRecovery_7C31"
@@ -180,6 +180,8 @@ func main() {
 		err = installOrRepair()
 	case "--repair-network", "repair-network":
 		err = repairNetworkState()
+	case "--maintenance-pause", "maintenance-pause":
+		err = maintenancePause()
 	case "--service-acl-repair":
 		err = repairServiceACLAsSystem()
 	case "--version", "version":
@@ -192,12 +194,12 @@ func main() {
 		logLine("ERROR: %v", err)
 		fmt.Fprintln(os.Stderr, err)
 		if interactiveLaunch {
-			showMessage("NovaBlock v1.0.34 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
+			showMessage("NovaBlock v1.0.35 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
 		}
 		os.Exit(1)
 	}
 	if interactiveLaunch {
-		showMessage("NovaBlock v1.0.34", "Installation et controle de sante termines avec succes.", false)
+		showMessage("NovaBlock v1.0.35", "Installation et controle de sante termines avec succes.", false)
 	}
 }
 
@@ -313,7 +315,7 @@ func installOrRepair() error {
 			setGate(false)
 		}
 		logLine("install/repair already healthy")
-		fmt.Println("NovaBlock v1.0.34 recovery layer: OK")
+		fmt.Println("NovaBlock v1.0.35 recovery layer: OK")
 		return nil
 	}
 
@@ -351,7 +353,7 @@ func installOrRepair() error {
 		setGate(false)
 	}
 	logLine("install/repair complete")
-	fmt.Println("NovaBlock v1.0.34 recovery layer: OK")
+	fmt.Println("NovaBlock v1.0.35 recovery layer: OK")
 	return nil
 }
 
@@ -626,6 +628,38 @@ func waitForPredecessorRemoval(max time.Duration) error {
 	return errors.New("a predecessor recovery component could not be removed")
 }
 
+func maintenancePause() error {
+	if err := requireAdmin(); err != nil {
+		return err
+	}
+	// The interactive emergency tool writes this only after its time window
+	// and manual challenge have been verified. Ordinary direct calls fail.
+	if !markerRecent("shutdown.sentinel") {
+		return errors.New("emergency maintenance marker is missing or expired")
+	}
+	if !serviceExists() {
+		return errors.New("recovery service is missing")
+	}
+	logLine("emergency maintenance pause requested")
+	if err := ensureServiceMaintenanceAccess(); err != nil {
+		return err
+	}
+	if serviceIsRunning() {
+		if _, err := runCommand("sc.exe", "stop", serviceName); err != nil {
+			return fmt.Errorf("stop recovery service: %w", err)
+		}
+		waitForServiceStop(4 * time.Second)
+	}
+	if serviceIsRunning() {
+		return errors.New("recovery service is still running")
+	}
+	if _, err := runCommand("sc.exe", "config", serviceName, "start=", "disabled"); err != nil {
+		return fmt.Errorf("disable recovery service for emergency repair: %w", err)
+	}
+	setGate(false)
+	return nil
+}
+
 func repairNetworkState() error {
 	if err := requireAdmin(); err != nil {
 		return err
@@ -651,7 +685,7 @@ func statusCheck() error {
 	if !freshHeartbeat(2 * time.Second) {
 		return errors.New("recovery heartbeat is not fresh")
 	}
-	fmt.Println("NovaBlock v1.0.34 recovery layer: healthy")
+	fmt.Println("NovaBlock v1.0.35 recovery layer: healthy")
 	return nil
 }
 

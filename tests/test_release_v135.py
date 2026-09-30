@@ -1,12 +1,13 @@
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ReleaseV134Tests(unittest.TestCase):
+class ReleaseV135Tests(unittest.TestCase):
     def test_release_version(self):
-        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.34")
+        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.35")
 
     def test_recovery_fast_path_contract(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
@@ -18,11 +19,12 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertNotIn("Set-DnsClientServerAddress", src)
         self.assertNotIn("ipconfig", src.lower())
 
-    def test_recovery_has_no_direct_disable_or_downgrade_action(self):
+    def test_emergency_maintenance_requires_recent_marker_and_has_no_downgrade(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
-        self.assertNotIn('case "--maintenance-pause"', src)
+        maintenance = src[src.index("func maintenancePause()") : src.index("func repairNetworkState()")]
+        self.assertIn('markerRecent("shutdown.sentinel")', maintenance)
+        self.assertIn('case "--maintenance-pause"', src)
         self.assertNotIn('case "--rollback"', src)
-        self.assertNotIn("func maintenancePause()", src)
         self.assertNotIn("func rollback()", src)
 
     def test_recovery_requires_interactive_task_and_cleans_predecessors(self):
@@ -55,8 +57,8 @@ class ReleaseV134Tests(unittest.TestCase):
     def test_double_click_reports_success_or_failure(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
         self.assertIn("interactiveLaunch := len(os.Args) == 1", src)
-        self.assertIn('showMessage("NovaBlock v1.0.34 - echec"', src)
-        self.assertIn('showMessage("NovaBlock v1.0.34", "Installation et controle de sante termines avec succes."', src)
+        self.assertIn('showMessage("NovaBlock v1.0.35 - echec"', src)
+        self.assertIn('showMessage("NovaBlock v1.0.35", "Installation et controle de sante termines avec succes."', src)
         self.assertIn('user32.NewProc("MessageBoxW")', src)
 
     def test_partial_install_acl_is_repaired_only_as_local_system(self):
@@ -84,6 +86,7 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertIn("update.exe", src)
         self.assertIn("--repair", src)
         self.assertIn("--status", src)
+        self.assertIn("--repair-firewall", src)
 
     def test_packaged_selftest_requires_popup_uia_dependencies(self):
         src = (ROOT / "novablock" / "release_selftest.py").read_text(encoding="utf-8")
@@ -91,8 +94,9 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertIn('checks["uia_dependencies"]', src)
         self.assertIn("monitor.HAS_UIA", src)
 
-    def test_reactivation_is_v134_aware(self):
+    def test_reactivation_is_v135_aware(self):
         reactivate = (ROOT / "outils" / "REACTIVATE.ps1").read_text(encoding="utf-8", errors="replace")
+        self.assertIn("v1.0.35", reactivate)
         self.assertIn("--repair", reactivate)
         self.assertIn("--status", reactivate)
         self.assertIn("Start-ScheduledTask -TaskName 'NovaBlockApp'", reactivate)
@@ -100,11 +104,31 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertIn("https://example.com", reactivate)
         self.assertNotIn("9.9.9.11", reactivate)
 
-    def test_workflow_builds_and_publishes_protected_v134_assets(self):
+    def test_emergency_reset_preserves_all_gates(self):
+        emergency = (ROOT / "outils" / "EMERGENCY_RESET.ps1").read_text(encoding="utf-8", errors="replace")
+        self.assertIn("while ($chars.Count -lt 200)", emergency)
+        self.assertIn("$saisie.MaxLength   = 200", emergency)
+        self.assertIn("$saisie.ShortcutsEnabled = $false", emergency)
+        self.assertIn("Test-FenetreBloquee", emergency)
+        self.assertIn("$btn.Add_Click({\n    if (-not [string]::Equals", emergency.replace("\r\n", "\n"))
+        self.assertIn("$script:logFile", emergency)
+        self.assertIn("--maintenance-pause", emergency)
+
+    def test_network_repairs_keep_the_filter_active(self):
+        unstick = (ROOT / "outils" / "unstick_sockets.ps1").read_text(encoding="utf-8").lower()
+        internet = (ROOT / "outils" / "REPARE_INTERNET.ps1").read_text(encoding="utf-8").lower()
+        self.assertIn("--repair-firewall", unstick)
+        self.assertIn("start-transcript", unstick)
+        self.assertNotIn("stop-process -name novablock", unstick)
+        self.assertNotIn("-resetserveraddresses", unstick)
+        self.assertIn("--repair-firewall", internet)
+        self.assertNotIn("$kw.deletevalue", internet)
+
+    def test_workflow_builds_and_publishes_v135_assets(self):
         wf = (ROOT / ".github" / "workflows" / "windows-release.yml").read_text(encoding="utf-8")
         for expected in ("actions/setup-go@v5", "go vet ./...", "update.exe", "SHA256SUMS.txt"):
             self.assertIn(expected, wf)
-        self.assertIn("release/v1.0.34-publication", wf)
+        self.assertIn("release/v1.0.35-recovery-tools", wf)
         self.assertIn("github.com/tc-hib/go-winres@v0.3.3", wf)
         self.assertIn("--manifest cli --admin", wf)
         self.assertIn("publish_release:", wf)
@@ -115,8 +139,14 @@ class ReleaseV134Tests(unittest.TestCase):
         package = wf[wf.index("- name: Package tools and checksums") : wf.index("- uses: actions/upload-artifact@v4")]
         self.assertIn("$safeTools = @(", package)
         self.assertNotIn("Copy-Item outils/*", package)
-        for name in ("EMERGENCY_RESET", "REPARE_INTERNET", "unstick_sockets", "whitelist_site", "rollback_1.33"):
-            self.assertNotIn(name, package)
+        listed = set(re.findall(r"^\s+'([^']+)'", package, flags=re.MULTILINE))
+        self.assertEqual(listed, {
+            "LISEZ-MOI.txt", "EMERGENCY_RESET.bat", "EMERGENCY_RESET.ps1",
+            "REACTIVATE.bat", "REACTIVATE.ps1", "REPARE_INTERNET.ps1",
+            "MESURE_BOOT.ps1", "unstick_sockets.bat", "unstick_sockets.ps1",
+            "whitelist_site.bat", "whitelist_site.ps1", "elevate_update.ps1",
+            "update.bat",
+        })
         self.assertNotIn("rollback_1.33.exe", wf)
 
     def test_docs_record_startup_fix_and_release_gate(self):
@@ -124,10 +154,10 @@ class ReleaseV134Tests(unittest.TestCase):
         notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
 
         self.assertIn("session Windows 0", readme)
-        self.assertIn("**v1.0.34**", readme)
+        self.assertIn("**v1.0.35**", readme)
         self.assertIn("update.bat --local", readme)
-        self.assertIn("redémarrage Windows complet", notes)
-        self.assertIn("publication n'est plus automatique", notes)
+        self.assertIn("78 règles", notes)
+        self.assertIn("déclenchement manuel", notes)
 
 
 if __name__ == "__main__":
