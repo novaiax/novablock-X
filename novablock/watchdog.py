@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from . import config, blocker, browser_kill, crypto, mailer, browser_policies, firewall, tamper, persistence
+from . import config, blocker, browser_kill, crypto, mailer, browser_policies, firewall, tamper, persistence, recovery, trusted_clock
 from .paths import HEARTBEAT_FILE, ensure_dirs
 
 log = logging.getLogger("novablock.watchdog")
@@ -94,6 +94,7 @@ class Watchdog:
         # Dnscache to free it. The counter resets on any successful DNS op
         # or stream detection.
         self._dns_timeout_streak = 0
+        self._recovery_warned = False
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -112,6 +113,10 @@ class Watchdog:
         cfg = config.load()
         if not cfg.get("install_ts"):
             return
+        fast_recovery = recovery.fast_layer_healthy()
+        if not fast_recovery and not self._recovery_warned:
+            log.error("Fast recovery heartbeat stale; Windows may have blocked its runtime")
+        self._recovery_warned = not fast_recovery
         if not config.is_temp_unlocked():
             browser_kill.close_uc_browser_processes()
         if not cfg.get("default_popup_sites_seeded"):
@@ -180,11 +185,9 @@ class Watchdog:
                 log.warning("DoH firewall rules missing — re-applying")
                 tampered.append(tamper.FIREWALL_REMOVED)
                 firewall.block_doh_endpoints()
-            if not persistence.task_exists():
-                log.warning("Scheduled task deleted — re-installing")
-                tampered.append(tamper.TASK_DELETED)
-                persistence.install_scheduled_task()
-            if cfg.get("temp_unlock_until", 0) and cfg["temp_unlock_until"] <= time.time():
+            trusted_now = trusted_clock.cached_now()
+            if (cfg.get("temp_unlock_until", 0) and trusted_now is not None
+                    and cfg["temp_unlock_until"] <= trusted_now):
                 config.revoke_temp_unlock()
                 log.info("Temp unlock expired — block restored")
 
@@ -194,6 +197,16 @@ class Watchdog:
                 for reason in tampered:
                     tamper.send_tamper_alert(reason,
                                              detail="Détecté par le watchdog. Bloc réappliqué automatiquement.")
+
+        # Both tasks must remain correctly targeted even during a temporary
+        # code-authorized unlock. Existence alone would miss a disabled task or
+        # one retargeted to a different executable.
+        if not persistence.task_exists():
+            log.warning("SYSTEM watchdog task missing or invalid — re-installing")
+            persistence.install_scheduled_task()
+        if not persistence.logon_task_matches_current_user():
+            log.warning("Interactive app task missing or invalid — re-installing")
+            persistence.install_logon_task()
 
         if config.needs_code_rotation():
             self._rotate_code(cfg)

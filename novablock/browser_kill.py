@@ -12,7 +12,7 @@ log = logging.getLogger("novablock.browser_kill")
 BROWSERS = [
     "chrome.exe", "msedge.exe", "firefox.exe",
     "brave.exe", "opera.exe", "vivaldi.exe",
-    "iexplore.exe", "ucbrowser.exe", "ucbrowserlauncher.exe",
+    "iexplore.exe", "tor.exe", "ucbrowser.exe", "ucbrowserlauncher.exe",
 ]
 
 

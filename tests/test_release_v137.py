@@ -5,9 +5,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ReleaseV136Tests(unittest.TestCase):
+class ReleaseV137Tests(unittest.TestCase):
     def test_release_version(self):
-        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.36")
+        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.37")
 
     def test_recovery_fast_path_contract(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
@@ -37,7 +37,10 @@ class ReleaseV136Tests(unittest.TestCase):
         self.assertIn("validateInteractiveTask()", install)
         self.assertIn("<logontype>interactivetoken</logontype>", src)
         self.assertIn("app task must not run as LocalSystem", src)
-        self.assertIn('strings.Contains(compact, "--service-run")', src)
+        self.assertIn("validateInteractiveTaskXML(out, expected)", src)
+        self.assertIn("registeredAppPath()", src)
+        restart = src[src.index("func requestAppRestart()") : src.index("func terminateProcessesByName(")]
+        self.assertIn("validateInteractiveTask()", restart)
         self.assertIn("serviceIsRunning() && freshHeartbeat", install)
         self.assertNotIn("cleanupPredecessorComponents(false)", install)
         self.assertLess(install.index('runBestEffort("sc.exe", "start", serviceName)'), install.index("waitFreshHeartbeat"))
@@ -45,6 +48,12 @@ class ReleaseV136Tests(unittest.TestCase):
         self.assertLess(service.index("cleanupPredecessorComponents(true)"), service.index("nextHB :="))
         self.assertIn("waitForPredecessorRemoval", install)
         self.assertIn("installedBinaryMatchesSelf()", install)
+        self.assertNotIn("os.Remove(dst)", src[src.index("func installSelfCopy()"):
+                                              src.index("func fileSHA256(")])
+        main_check = src[src.index("func mainRunning()") : src.index("func requestAppRestart()")]
+        self.assertIn("mainMutexPresent()", main_check)
+        self.assertIn("mainProcessMatchesInstallation()", main_check)
+        self.assertIn('"main.pid"', main_check)
         self.assertIn("!predecessorServicesPresent()", install)
         self.assertIn("forceStuckProcess = forceStuckProcess && isLocalSystem()", src)
         self.assertIn("terminateProcessesByName(predecessorProcessNames)", src)
@@ -59,8 +68,8 @@ class ReleaseV136Tests(unittest.TestCase):
     def test_double_click_reports_success_or_failure(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
         self.assertIn("interactiveLaunch := len(os.Args) == 1", src)
-        self.assertIn('showMessage("NovaBlock v1.0.36 - echec"', src)
-        self.assertIn('showMessage("NovaBlock v1.0.36", "Installation et controle de sante termines avec succes."', src)
+        self.assertIn('showMessage("NovaBlock v1.0.37 - echec"', src)
+        self.assertIn('showMessage("NovaBlock v1.0.37", "Installation et controle de sante termines avec succes."', src)
         self.assertIn('user32.NewProc("MessageBoxW")', src)
 
     def test_partial_install_acl_is_repaired_only_as_local_system(self):
@@ -96,9 +105,9 @@ class ReleaseV136Tests(unittest.TestCase):
         self.assertIn('checks["uia_dependencies"]', src)
         self.assertIn("monitor.HAS_UIA", src)
 
-    def test_reactivation_is_v136_aware(self):
+    def test_reactivation_is_v137_aware(self):
         reactivate = (ROOT / "outils" / "REACTIVATE.ps1").read_text(encoding="utf-8", errors="replace")
-        self.assertIn("v1.0.36", reactivate)
+        self.assertIn("v1.0.37", reactivate)
         self.assertIn("--repair", reactivate)
         self.assertIn("--status", reactivate)
         self.assertIn("Start-ScheduledTask -TaskName 'NovaBlockApp'", reactivate)
@@ -126,11 +135,13 @@ class ReleaseV136Tests(unittest.TestCase):
         self.assertIn("--repair-firewall", internet)
         self.assertNotIn("$kw.deletevalue", internet)
 
-    def test_workflow_builds_and_publishes_v136_assets(self):
+    def test_workflow_builds_and_publishes_v137_assets(self):
         wf = (ROOT / ".github" / "workflows" / "windows-release.yml").read_text(encoding="utf-8")
         for expected in ("actions/setup-go@v5", "go vet ./...", "update.exe", "SHA256SUMS.txt"):
             self.assertIn(expected, wf)
-        self.assertIn("release/v1.0.36-single-updater", wf)
+        self.assertIn("audit/local-protections", wf)
+        self.assertIn("Application Continuity Runtime", wf)
+        self.assertNotIn("NovaBlock recovery installer", wf)
         self.assertIn("github.com/tc-hib/go-winres@v0.3.3", wf)
         self.assertIn("--manifest cli --admin", wf)
         self.assertIn("publish_release:", wf)
@@ -156,7 +167,7 @@ class ReleaseV136Tests(unittest.TestCase):
         notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
 
         self.assertIn("session Windows 0", readme)
-        self.assertIn("**v1.0.36**", readme)
+        self.assertIn("**v1.0.37**", readme)
         self.assertIn("update.bat --local", readme)
         self.assertIn("78 règles", notes)
         self.assertIn("publication manuelle", notes)

@@ -7,10 +7,12 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,7 +21,7 @@ import (
 )
 
 const (
-	releaseVersion = "v1.0.36"
+	releaseVersion = "v1.0.37"
 
 	// Internal identifiers are intentionally kept out of user-facing docs.
 	serviceName   = "AegisRecovery_7C31"
@@ -54,6 +56,8 @@ var (
 	procProcess32NextW           = kernel32.NewProc("Process32NextW")
 	procOpenProcess              = kernel32.NewProc("OpenProcess")
 	procTerminateProcess         = kernel32.NewProc("TerminateProcess")
+	procWaitForSingleObject      = kernel32.NewProc("WaitForSingleObject")
+	procQueryFullProcessImageW   = kernel32.NewProc("QueryFullProcessImageNameW")
 
 	procStartServiceCtrlDispatcherW   = advapi32.NewProc("StartServiceCtrlDispatcherW")
 	procRegisterServiceCtrlHandlerExW = advapi32.NewProc("RegisterServiceCtrlHandlerExW")
@@ -68,8 +72,10 @@ const (
 	errorAccessDenied = 5
 	errorFileNotFound = 2
 
-	th32csSnapProcess = 0x00000002
-	processTerminate  = 0x0001
+	th32csSnapProcess       = 0x00000002
+	processTerminate        = 0x0001
+	processQueryLimitedInfo = 0x1000
+	waitTimeout             = 0x00000102
 
 	serviceWin32OwnProcess = 0x00000010
 	serviceStop            = 0x00000001
@@ -116,6 +122,12 @@ var (
 	stopOnce            sync.Once
 	stopCh              = make(chan struct{})
 	serviceStatusHandle uintptr
+	mainIdentityMu      sync.Mutex
+	mainIdentityChecked time.Time
+	mainIdentityValid   bool
+	appPathMu           sync.Mutex
+	appPathChecked      time.Time
+	appPathCached       string
 )
 
 var browserNames = map[string]struct{}{
@@ -127,6 +139,8 @@ var browserNames = map[string]struct{}{
 	"vivaldi.exe":           {},
 	"ucbrowser.exe":         {},
 	"ucbrowserlauncher.exe": {},
+	"iexplore.exe":          {},
+	"tor.exe":               {},
 }
 
 var predecessorServices = []string{
@@ -195,12 +209,12 @@ func main() {
 		logLine("ERROR: %v", err)
 		fmt.Fprintln(os.Stderr, err)
 		if interactiveLaunch {
-			showMessage("NovaBlock v1.0.36 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
+			showMessage("NovaBlock v1.0.37 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
 		}
 		os.Exit(1)
 	}
 	if interactiveLaunch {
-		showMessage("NovaBlock v1.0.36", "Installation et controle de sante termines avec succes.", false)
+		showMessage("NovaBlock v1.0.37", "Installation et controle de sante termines avec succes.", false)
 	}
 }
 
@@ -316,7 +330,7 @@ func installOrRepair() error {
 			setGate(false)
 		}
 		logLine("install/repair already healthy")
-		fmt.Println("NovaBlock v1.0.36 recovery layer: OK")
+		fmt.Println("NovaBlock v1.0.37 recovery layer: OK")
 		return nil
 	}
 
@@ -354,7 +368,7 @@ func installOrRepair() error {
 		setGate(false)
 	}
 	logLine("install/repair complete")
-	fmt.Println("NovaBlock v1.0.36 recovery layer: OK")
+	fmt.Println("NovaBlock v1.0.37 recovery layer: OK")
 	return nil
 }
 
@@ -390,7 +404,9 @@ func installSelfCopy() error {
 
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		_ = os.Remove(dst)
+		// Go's Windows rename uses MOVEFILE_REPLACE_EXISTING. Keep the previous
+		// executable intact if Defender or a still-running process rejects this
+		// replacement; removing it first creates an avoidable recovery gap.
 		if err := os.Rename(tmp, dst); err == nil {
 			return nil
 		}
@@ -471,6 +487,14 @@ func validateInteractiveTask() error {
 	if err != nil {
 		return fmt.Errorf("required interactive app task is unavailable: %w", err)
 	}
+	expected, err := registeredAppPath()
+	if err != nil {
+		return fmt.Errorf("registered app unavailable: %w", err)
+	}
+	return validateInteractiveTaskXML(out, expected)
+}
+
+func validateInteractiveTaskXML(out string, expected string) error {
 	compact := strings.ToLower(strings.Join(strings.Fields(out), ""))
 	if !strings.Contains(compact, "<logontype>interactivetoken</logontype>") {
 		return errors.New("app task must use an interactive user token")
@@ -479,11 +503,55 @@ func validateInteractiveTask() error {
 		strings.Contains(compact, "<userid>system</userid>") {
 		return errors.New("app task must not run as LocalSystem")
 	}
-	if !strings.Contains(compact, "novablock.exe</command>") ||
-		strings.Contains(compact, "--service-run") {
+	if strings.Contains(compact, "<enabled>false</enabled>") ||
+		strings.TrimSpace(taskXMLValue(out, "Arguments")) != "" {
 		return errors.New("app task action is not a supported interactive NovaBlock launch")
 	}
+	command := strings.Trim(taskXMLValue(out, "Command"), `"`)
+	if command == "" ||
+		!strings.EqualFold(filepath.Clean(command), filepath.Clean(expected)) {
+		return errors.New("app task command differs from the registered NovaBlock executable")
+	}
 	return nil
+}
+
+func taskXMLValue(source string, tag string) string {
+	lower := strings.ToLower(source)
+	open := "<" + strings.ToLower(tag) + ">"
+	closeTag := "</" + strings.ToLower(tag) + ">"
+	start := strings.Index(lower, open)
+	if start < 0 {
+		return ""
+	}
+	start += len(open)
+	end := strings.Index(lower[start:], closeTag)
+	if end < 0 {
+		return ""
+	}
+	return html.UnescapeString(strings.TrimSpace(source[start : start+end]))
+}
+
+func registeredAppPath() (string, error) {
+	out, err := runCommand("reg.exe", "query",
+		`HKLM\Software\Microsoft\Windows\CurrentVersion\Run`, "/v", "NovaBlock")
+	if err != nil {
+		return "", err
+	}
+	return parseRegisteredAppPath(out)
+}
+
+func parseRegisteredAppPath(out string) (string, error) {
+	for _, line := range strings.Split(out, "\n") {
+		upper := strings.ToUpper(line)
+		marker := strings.Index(upper, "REG_SZ")
+		if marker >= 0 && strings.Contains(upper[:marker], "NOVABLOCK") {
+			value := strings.TrimSpace(line[marker+len("REG_SZ"):])
+			if value != "" {
+				return strings.Trim(value, `"`), nil
+			}
+		}
+	}
+	return "", errors.New("registered NovaBlock executable path is missing")
 }
 
 func loosenServiceACL() error {
@@ -686,7 +754,10 @@ func statusCheck() error {
 	if !freshHeartbeat(2 * time.Second) {
 		return errors.New("recovery heartbeat is not fresh")
 	}
-	fmt.Println("NovaBlock v1.0.36 recovery layer: healthy")
+	if !mainRunning() {
+		return errors.New("main NovaBlock process identity is not healthy")
+	}
+	fmt.Println("NovaBlock v1.0.37 recovery layer: healthy")
 	return nil
 }
 
@@ -732,6 +803,25 @@ func maintenanceActive() bool {
 }
 
 func mainRunning() bool {
+	if !mainMutexPresent() {
+		return false
+	}
+	mainIdentityMu.Lock()
+	if time.Since(mainIdentityChecked) < 50*time.Millisecond {
+		valid := mainIdentityValid
+		mainIdentityMu.Unlock()
+		return valid
+	}
+	mainIdentityMu.Unlock()
+	valid := mainProcessMatchesInstallation()
+	mainIdentityMu.Lock()
+	mainIdentityValid = valid
+	mainIdentityChecked = time.Now()
+	mainIdentityMu.Unlock()
+	return valid
+}
+
+func mainMutexPresent() bool {
 	name, _ := syscall.UTF16PtrFromString(mainMutexName)
 	r, _, e := procOpenMutexW.Call(synchronize, 0, uintptr(unsafe.Pointer(name)))
 	if r != 0 {
@@ -748,7 +838,66 @@ func mainRunning() bool {
 	return false
 }
 
+func registeredAppPathCached() string {
+	appPathMu.Lock()
+	if appPathCached != "" && time.Since(appPathChecked) < time.Second {
+		path := appPathCached
+		appPathMu.Unlock()
+		return path
+	}
+	appPathMu.Unlock()
+	path, err := registeredAppPath()
+	if err != nil {
+		return ""
+	}
+	appPathMu.Lock()
+	appPathCached = path
+	appPathChecked = time.Now()
+	appPathMu.Unlock()
+	return path
+}
+
+func sameExecutablePath(actual string, expected string) bool {
+	actual = strings.TrimPrefix(actual, `\\?\`)
+	expected = strings.TrimPrefix(expected, `\\?\`)
+	return actual != "" && expected != "" &&
+		strings.EqualFold(filepath.Clean(actual), filepath.Clean(expected))
+}
+
+func mainProcessMatchesInstallation() bool {
+	data, err := os.ReadFile(filepath.Join(programDataDir(), "main.pid"))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.ParseUint(strings.TrimSpace(string(data)), 10, 32)
+	if err != nil || pid == 0 {
+		return false
+	}
+	handle, _, _ := procOpenProcess.Call(processQueryLimitedInfo|synchronize, 0, uintptr(pid))
+	if handle == 0 {
+		return false
+	}
+	defer procCloseHandle.Call(handle)
+	state, _, _ := procWaitForSingleObject.Call(handle, 0)
+	if state != waitTimeout {
+		return false
+	}
+	var image [32768]uint16
+	length := uint32(len(image))
+	ok, _, _ := procQueryFullProcessImageW.Call(
+		handle, 0, uintptr(unsafe.Pointer(&image[0])), uintptr(unsafe.Pointer(&length)))
+	if ok == 0 || length == 0 {
+		return false
+	}
+	actual := syscall.UTF16ToString(image[:int(length)])
+	return sameExecutablePath(actual, registeredAppPathCached())
+}
+
 func requestAppRestart() {
+	if err := validateInteractiveTask(); err != nil {
+		logLine("restart refused because interactive task is invalid: %v", err)
+		return
+	}
 	if out, err := runCommand("schtasks", "/Run", "/TN", appTaskName); err != nil {
 		logLine("restart request failed: %v output=%s", err, strings.TrimSpace(out))
 	}

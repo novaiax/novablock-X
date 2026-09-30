@@ -2,7 +2,7 @@ name: Windows executable release
 
 on:
   push:
-    branches: [main, release/v1.0.36-single-updater, release/v1.0.35-recovery-tools, release/v1.0.34-publication, release/v1.0.34-v5, fix/startup-ui-recovery, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
+    branches: [main, audit/local-protections, release/v1.0.36-single-updater, release/v1.0.35-recovery-tools, release/v1.0.34-publication, release/v1.0.34-v5, fix/startup-ui-recovery, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
     paths:
       - .github/workflows/windows-release.yml
       - novablock/**
@@ -90,17 +90,25 @@ jobs:
       - name: Validate recovery layer source
         working-directory: recovery_v134
         run: |
-          go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd/recovery/rsrc --manifest cli --admin --product-version 1.0.36.0 --file-version 1.0.36.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $files = gofmt -l .
           if ($files) { Write-Host $files; throw 'gofmt required' }
           go vet ./...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test ./...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd/recovery/rsrc --manifest cli --admin --product-version 1.0.37.0 --file-version 1.0.37.0 --file-description "Application Continuity Runtime" --product-name "Continuity Runtime"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Compile NovaBlock.exe
         run: |
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          Push-Location recovery_v134
+          try {
+            go build -trimpath -ldflags='-s -w -H=windowsgui' -o ../build/relay.exe ./cmd/relay
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            ../build/relay.exe --probe
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          } finally { Pop-Location }
           python -m PyInstaller novablock.spec --clean --noconfirm --distpath dist-release
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -119,7 +127,7 @@ jobs:
           if (-not $result.ok) { throw 'Packaged runtime self-test failed' }
           Copy-Item $report dist-release/runtime-selftest.json
 
-      - name: Compile v1.0.36 recovery executable
+      - name: Compile v1.0.37 recovery executable
         working-directory: recovery_v134
         run: |
           go build -trimpath -ldflags='-s -w' -o ../dist-release/update.exe ./cmd/recovery
@@ -128,6 +136,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ../dist-release/update.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $meta = (Get-Item ../dist-release/update.exe).VersionInfo
+          if ($meta.FileDescription -match 'NovaBlock' -or $meta.ProductName -match 'NovaBlock') {
+            throw 'Recovery process metadata must remain neutral'
+          }
 
       - name: Package tools and checksums
         run: |

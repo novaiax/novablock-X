@@ -4,15 +4,17 @@ NovaBlock est un bloqueur Windows de contenu adulte et de distractions, avec plu
 
 ## Version actuelle
 
-**v1.0.36**
+**v1.0.37**
 
-La v1.0.36 se met à jour avec un seul fichier `update.bat` autonome. Elle ajoute les sites popup manquants sur les installations existantes, contrôle le DNS familial de chaque interface active et ferme UC Browser lorsque son filtrage ne peut pas être garanti.
+La v1.0.37 se met à jour avec un seul fichier `update.bat` autonome. Elle ajoute un relais de relance local intégré à `NovaBlock.exe` : son processus porte un nom neutre, vérifie l'identité de l'application avant de la relancer dans la session utilisateur et ferme les fenêtres de navigateur reconnues pendant l'interruption. Le service système reste une seconde couche de récupération.
+
+La configuration manquante ou illisible conserve le filtre actif si des traces d'installation existent. Les fichiers de données sont réservés aux administrateurs et à Windows. Les décisions de déblocage, de rotation du code et de désinstallation utilisent une heure HTTPS validée ; si elle est indisponible, ces actions restent verrouillées.
 
 Les 17 sites personnels de la machine de référence sont présents dès la première installation. Lors d'une mise à jour, les entrées manquantes sont ajoutées une seule fois, en conservant les sites déjà configurés. Reddit n'est pas ajouté à cette liste ; son filtre NSFW distinct reste actif.
 
 La publication exige la réussite des tests Windows et la vérification d'un redémarrage complet. Le workflow GitHub construit les artefacts, puis publie uniquement après un déclenchement manuel explicite depuis `main`.
 
-Lors du test réel ayant servi de référence, une fermeture forcée de l'application principale a été suivie d'un retour en moins d'une seconde. La v5 réduit aussi la fenêtre interactive entre la disparition de l'application et son retour en fermant immédiatement les navigateurs, puis en lançant en parallèle la protection réseau fail-closed et la relance.
+Le service v1.0.36 avait relancé le processus principal en environ 1,1 à 1,3 seconde lors de trois événements journalisés sur le PC de référence. Le 30 septembre 2026, Windows Defender a ensuite mis son binaire en quarantaine ; son service s'est arrêté. Le temps observé pour le retour de l'icône était alors d'environ dix secondes. La v1.0.37 journalise séparément la détection de l'absence, le retour du processus et l'apparition de l'icône. Le seuil de deux secondes pour l'icône devra être confirmé après installation sur la machine concernée.
 
 Le chemin rapide de récupération ne modifie pas le DNS, les cartes réseau, le service DNS Windows ni le fichier hosts. Ces mécanismes restent gérés par le cœur NovaBlock normal, pas par la couche de récupération v5.
 
@@ -55,7 +57,7 @@ Les binaires de release sont reconstruits par GitHub Actions à partir des sourc
 ## Installation neuve
 
 1. Lance `NovaBlock.exe` en administrateur et termine l'assistant. Il configure le blocage hosts, le DNS familial et les politiques navigateur, puis crée les **78 règles DoH de NovaBlock** et ses tâches de surveillance. Les autres règles du pare-feu Windows restent en place.
-2. Pour ajouter la récupération v5, télécharge et lance `update.bat`. Il demande l'UAC, télécharge le composant `update.exe` et contrôle son heartbeat. **`NovaBlock.exe` seul n'installe pas ce composant.**
+2. `NovaBlock.exe` contient le relais local. Pour ajouter le service système de récupération, télécharge et lance `update.bat`. Il demande l'UAC, télécharge le composant `update.exe` et contrôle son heartbeat. **`NovaBlock.exe` seul n'installe pas ce service.**
 
 Sur une ancienne installation, lancer seulement `NovaBlock.exe` complète ou répare les règles requises, mais ne nettoie pas les milliers de doublons hérités. Ce nettoyage ciblé est effectué par `update.bat`.
 
@@ -65,10 +67,10 @@ Sur une ancienne installation, lancer seulement `NovaBlock.exe` complète ou ré
 2. Double-clique dessus et accepte l'UAC. La fenêtre reste ouverte à la fin pour afficher le résultat et le chemin du journal.
 3. Le script télécharge et vérifie `NovaBlock.exe` et `update.exe`.
 4. Il remplace l'application principale en conservant la configuration dans `%ProgramData%\NovaBlock`.
-5. Il vérifie les 78 règles DoH, retire uniquement les doublons anciens après sauvegarde, puis installe ou répare la couche de récupération v1.0.36.
+5. Il vérifie les 78 règles DoH, retire uniquement les doublons anciens après sauvegarde, puis installe ou répare la couche de récupération v1.0.37.
 6. Il relance NovaBlock et vérifie le heartbeat de l'application ainsi que celui du mécanisme de récupération.
 
-Un update interrompu est conçu pour échouer proprement et réarmer l'installation précédente plutôt que de laisser une mise à jour partielle. Le script n'arrête plus NovaBlock de force et ne modifie plus les ACL du fichier `hosts` : il demande un arrêt volontaire, attend de façon bornée, conserve une copie du cœur précédent et restaure cette copie si le swap n'aboutit pas. Une installation avec 78 règles valides ne subit aucun changement de pare-feu. Le nettoyage de règles anciennes demande un redémarrage Windows pour recharger la politique.
+Un update interrompu tente de restaurer l'installation précédente et demande son redémarrage. Il affiche séparément si la restauration et la demande de relance ont réussi ; leur réussite ne prouve pas encore que l'icône ou le service sont revenus. Le script n'arrête plus NovaBlock de force et ne modifie plus les ACL du fichier `hosts` : il demande un arrêt volontaire, attend de façon bornée et conserve une copie du cœur précédent. Une installation avec 78 règles valides ne subit aucun changement de pare-feu. Le nettoyage de règles anciennes demande un redémarrage Windows pour recharger la politique.
 
 Le relais UAC est intégré à `update.bat` et conserve les chemins contenant des espaces. Le mode local écrit deux entrées SHA-256 distinctes, journalise son résultat final et laisse jusqu'à 20 secondes au watchdog pour appliquer le DNS familial avant de conclure à un échec. `update.exe` sait également reprendre une installation partielle dont le composant de récupération a déjà été créé puis verrouillé ; cette réparation reste strictement limitée au composant concerné et nettoie sa tâche ponctuelle.
 
@@ -139,6 +141,10 @@ Prérequis principaux : Python 3.12+, Go 1.22+ et Windows pour les tests runtime
 ```bat
 python -m pip install -r requirements.txt
 python -m unittest discover -s tests -p "test_*.py" -v
+mkdir build
+cd recovery_v134
+go build -trimpath -ldflags="-s -w -H=windowsgui" -o ..\build\relay.exe .\cmd\relay
+cd ..
 python -m PyInstaller novablock.spec --clean --noconfirm --distpath dist-release
 ```
 
@@ -146,9 +152,10 @@ Pour la couche de récupération :
 
 ```bat
 cd recovery_v134
-go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd\recovery\rsrc --manifest cli --admin --product-version 1.0.36.0 --file-version 1.0.36.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
 gofmt -w cmd\recovery\main_windows.go
 go vet ./...
+go test ./...
+go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd\recovery\rsrc --manifest cli --admin --product-version 1.0.37.0 --file-version 1.0.37.0 --file-description "Application Continuity Runtime" --product-name "Continuity Runtime"
 go build -trimpath -ldflags="-s -w" -o ..\dist-release\update.exe .\cmd\recovery
 ```
 
@@ -160,14 +167,16 @@ outils\update.bat --local "dist-release\NovaBlock.exe" "dist-release\update.exe"
 
 Le mode local calcule et vérifie ses propres empreintes, utilise le même arrêt volontaire et exécute les mêmes contrôles finaux que le mode GitHub.
 
-### Validation réelle avant publication
+### Validation réelle sur chaque appareil
 
-Chaque nouvelle release exige la validation des points suivants sur Windows :
+Après installation, contrôler les points suivants sur Windows :
 
 - lancement manuel dans la session utilisateur avec fenêtre, zone de notification et popup ;
 - blocage effectif, DNS familial IPv4/IPv6 et Internet bénin toujours disponible ;
 - récupération automatique v5 sans modification du DNS dans le chemin rapide ;
 - démarrage automatique après un redémarrage Windows complet, sans instance UI en session 0 ni ancien composant concurrent.
+
+L'autotest du paquet et les tests simulés vérifient les chemins de code. UC Browser n'est pas installé sur le PC de référence et le portable concerné n'est pas accessible dans cette session : son fonctionnement réel, le retour de l'icône en moins de deux secondes et la résistance du service à Defender restent à mesurer après installation. Un résultat de test simulé ne vaut pas une validation sur cet appareil.
 
 ## Limites
 

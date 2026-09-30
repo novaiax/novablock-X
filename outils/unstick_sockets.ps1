@@ -1,4 +1,4 @@
-# NovaBlock v1.0.36 - reparation des sockets et du navigateur
+# NovaBlock v1.0.37 - reparation des sockets et du navigateur
 # Garde les protections actives pendant la reparation.
 
 $ErrorActionPreference = 'Continue'

@@ -1,6 +1,6 @@
 @echo off
 REM ============================================================
-REM NovaBlock v1.0.36 - reparation des sockets (lanceur)
+REM NovaBlock v1.0.37 - reparation des sockets (lanceur)
 REM ============================================================
 REM Demande l'UAC puis lance la reparation visible, avec journal conserve.
 REM Le script re-applique les protections et verifie DNS, DoH et HTTPS.

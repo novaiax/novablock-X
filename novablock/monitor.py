@@ -12,7 +12,7 @@ import time
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
-from . import browser_kill, tab_close
+from . import browser_kill
 
 try:
     import win32gui
@@ -87,12 +87,13 @@ class WindowMonitor:
         self.poll_interval = min(max(float(poll_interval), 0.05), 0.10)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
-        self._cooldown_until = 0.0
         self._custom_cache_until = 0.0
         self._custom_domains: list[str] = []
         self._custom_urls: list[str] = []
         self._browser_cache: dict[int, tuple[float, bool]] = {}
-        self._address_cache: dict[int, tuple[float, str, bool]] = {}
+        self._address_cache: dict[tuple[int, bool], tuple[float, str, bool]] = {}
+        self._unknown_probe: dict[int, tuple[float, str]] = {}
+        self._next_cache_prune = time.monotonic() + 60.0
 
     def start(self) -> None:
         if not HAS_WIN32:
@@ -128,8 +129,16 @@ class WindowMonitor:
                     pass
         except Exception:
             ok = False
-        self._browser_cache[pid] = (now + 5.0, ok)
+        self._browser_cache[pid] = (now + (5.0 if ok else 0.5), ok)
         return ok
+
+    def _prune_caches(self, now: float) -> None:
+        self._browser_cache = {pid: entry for pid, entry in self._browser_cache.items()
+                               if entry[0] > now}
+        self._address_cache = {key: entry for key, entry in self._address_cache.items()
+                               if entry[0] > now}
+        self._unknown_probe = {pid: entry for pid, entry in self._unknown_probe.items()
+                               if entry[0] > now - 60.0}
 
     @staticmethod
     def _is_uc_browser(pid: int) -> bool:
@@ -143,6 +152,13 @@ class WindowMonitor:
             return browser_kill.is_uc_browser_process(name, path)
         except Exception:
             return False
+
+    @staticmethod
+    def _title_identifies_uc_browser(title: str) -> bool:
+        title = (title or "").strip().lower()
+        return title == "uc browser" or title.endswith((
+            " - uc browser", " — uc browser", " | uc browser",
+        )) or title.startswith("uc browser - ")
 
     @staticmethod
     def _normalize_host(raw: str) -> str:
@@ -245,7 +261,7 @@ class WindowMonitor:
         except Exception:
             return False
 
-    def _read_address_bar(self, hwnd: int) -> tuple[str, bool]:
+    def _read_address_bar(self, hwnd: int, require_hint: bool = False) -> tuple[str, bool]:
         """Return (address_text, address_bar_has_keyboard_focus).
 
         Matching while the bar is focused is suppressed: typing/pasting is not
@@ -255,7 +271,8 @@ class WindowMonitor:
         if not HAS_UIA or (not self._custom_domains and not self._custom_urls):
             return "", False
         now = time.monotonic()
-        cached = self._address_cache.get(hwnd)
+        cache_key = (hwnd, require_hint)
+        cached = self._address_cache.get(cache_key)
         if cached and now < cached[0]:
             return cached[1], cached[2]
 
@@ -275,6 +292,9 @@ class WindowMonitor:
                 if not self._control_is_near_browser_top(control, window):
                     continue
                 name = self._control_name(control)
+                hinted = any(hint in name for hint in _ADDRESS_NAME_HINTS)
+                if require_hint and not hinted:
+                    continue
                 values: list[str] = []
                 for getter in ("get_value", "window_text"):
                     try:
@@ -290,7 +310,7 @@ class WindowMonitor:
                     y = control.rectangle().top
                 except Exception:
                     y = best_y
-                if any(hint in name for hint in _ADDRESS_NAME_HINTS):
+                if hinted:
                     y -= 10000
                 if y < best_y:
                     best_y = y
@@ -299,7 +319,7 @@ class WindowMonitor:
         except Exception as e:
             log.debug("UIA address read failed hwnd=%s: %s", hwnd, e)
 
-        self._address_cache[hwnd] = (now + 0.06, best_url, best_focused)
+        self._address_cache[cache_key] = (now + 0.06, best_url, best_focused)
         return best_url, best_focused
 
     def _match_committed_custom_navigation(self, hwnd: int) -> Optional[str]:
@@ -330,21 +350,35 @@ class WindowMonitor:
     def _loop(self) -> None:
         while not self._stop.is_set():
             try:
-                if time.monotonic() < self._cooldown_until:
-                    self._stop.wait(self.poll_interval)
-                    continue
+                now = time.monotonic()
+                if now >= self._next_cache_prune:
+                    self._prune_caches(now)
+                    self._next_cache_prune = now + 60.0
                 hwnd = win32gui.GetForegroundWindow()
                 if not hwnd:
                     self._stop.wait(self.poll_interval)
                     continue
                 title = win32gui.GetWindowText(hwnd) or ""
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                if self._is_uc_browser(pid):
+                is_uc = self._is_uc_browser(pid)
+                title_only_uc = (
+                    not is_uc and not self._is_browser(pid)
+                    and self._title_identifies_uc_browser(title)
+                )
+                if is_uc or title_only_uc:
                     from . import config
                     if not config.is_temp_unlocked():
                         log.warning("UC Browser active without verifiable filtering; closing it")
-                        self._cooldown_until = time.monotonic() + 3.0
-                        browser_kill.close_uc_browser_processes()
+                        if is_uc:
+                            browser_kill.close_uc_browser_processes()
+                        else:
+                            try:
+                                proc = psutil.Process(pid)
+                                if proc.name().lower() != "novablock.exe":
+                                    proc.kill()
+                                    log.warning("Closed UC-branded browser process pid=%s", pid)
+                            except Exception as exc:
+                                log.warning("Could not close UC-branded process pid=%s: %s", pid, exc)
                         try:
                             self.on_detect(title, "UC Browser non contrôlé", hwnd)
                         except Exception as exc:
@@ -352,22 +386,32 @@ class WindowMonitor:
                     self._stop.wait(self.poll_interval)
                     continue
                 if self._is_browser(pid):
-                    if tab_close.close_recently_sent(hwnd):
-                        self._stop.wait(self.poll_interval)
-                        continue
                     hit = self._match_committed_custom_navigation(hwnd)
                     if hit:
                         log.warning("Committed custom navigation detected: %r hwnd=%s", hit, hwnd)
                     if not hit:
                         hit = self._check_title(title)
-                    if hit:
-                        log.warning("Blocked trigger detected: %r (matched %r) hwnd=%s",
-                                    title, hit, hwnd)
-                        self._cooldown_until = time.monotonic() + 3.0
-                        try:
-                            self.on_detect(title, hit, hwnd)
-                        except Exception as e:
-                            log.error("on_detect callback failed: %s", e)
+                else:
+                    # A browser absent from the name list can still expose a
+                    # real URL in a labelled address bar. Keep the stricter
+                    # name hint requirement to avoid ordinary application
+                    # text fields becoming popup triggers.
+                    hit = None
+                    now = time.monotonic()
+                    next_probe, previous_title = self._unknown_probe.get(pid, (0.0, ""))
+                    if now >= next_probe or title != previous_title:
+                        self._reload_custom_config()
+                        address, editing = self._read_address_bar(hwnd, require_hint=True)
+                        self._unknown_probe[pid] = (now + (0.1 if address else 0.25), title)
+                        if address and not editing:
+                            hit = self._match_custom_url(address) or self._check_title(title)
+                if hit:
+                    log.warning("Blocked trigger detected: %r (matched %r) hwnd=%s",
+                                title, hit, hwnd)
+                    try:
+                        self.on_detect(title, hit, hwnd)
+                    except Exception as e:
+                        log.error("on_detect callback failed: %s", e)
             except Exception as e:
                 log.debug("monitor loop error: %s", e)
             self._stop.wait(self.poll_interval)

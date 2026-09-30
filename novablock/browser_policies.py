@@ -198,32 +198,37 @@ def remove_all_browser_policies() -> None:
     log.info("Browser policies removed (including Reddit URLBlocklist)")
 
 
-def policies_present() -> bool:
-    """Check if our policies are in place. Returns True only when BOTH the
-    DoH-off baseline AND the Reddit NSFW URLBlocklist are present in Chrome
-    (the most-used browser, used as canary). This way, when we add new
-    policy layers (like Reddit), the watchdog automatically re-applies
-    them on the next tick after an upgrade — no manual intervention."""
-    from . import reddit_filter
-    # 1. DoH-off baseline on Chrome
-    doh_off = False
+def _policy_value(path: str, name: str):
     try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                            r"SOFTWARE\Policies\Google\Chrome", 0, winreg.KEY_READ) as k:
-            v, _ = winreg.QueryValueEx(k, "DnsOverHttpsMode")
-            doh_off = (v == "off")
-    except Exception:
-        # Fallback: try Edge as canary
-        try:
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
-                                r"SOFTWARE\Policies\Microsoft\Edge", 0, winreg.KEY_READ) as k:
-                v, _ = winreg.QueryValueEx(k, "DnsOverHttpsMode")
-                doh_off = (v == "off")
-        except Exception:
-            pass
-    if not doh_off:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path, 0, winreg.KEY_READ) as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except OSError:
+        return None
+
+
+def policies_present() -> bool:
+    """Check every managed browser, not only a Chrome/Edge canary."""
+    from . import reddit_filter
+    for vendor, path in CHROMIUM_VENDOR_PATHS.items():
+        expected = {
+            "DnsOverHttpsMode": "off",
+            "BuiltInDnsClientEnabled": 0,
+            "IncognitoModeAvailability": 1,
+            "ForceGoogleSafeSearch": 1,
+        }
+        if vendor == "Edge":
+            expected.update({"InPrivateModeAvailability": 1, "ForceBingSafeSearch": 2})
+        if any(_policy_value(path, name) != value for name, value in expected.items()):
+            log.warning("Missing or changed %s browser policy", vendor)
+            return False
+        if not reddit_filter.urlblocklist_present(path):
+            log.warning("Missing %s Reddit URLBlocklist", vendor)
+            return False
+    firefox = r"SOFTWARE\Policies\Mozilla\Firefox"
+    trr = firefox + r"\DNSOverHTTPS"
+    if (_policy_value(trr, "Enabled") != 0 or
+            _policy_value(trr, "Locked") != 1 or
+            _policy_value(firefox, "DisablePrivateBrowsing") != 1):
+        log.warning("Missing or changed Firefox browser policy")
         return False
-    # 2. Reddit URLBlocklist on Chrome (or Edge as fallback)
-    reddit_ok = reddit_filter.urlblocklist_present(r"SOFTWARE\Policies\Google\Chrome") \
-                or reddit_filter.urlblocklist_present(r"SOFTWARE\Policies\Microsoft\Edge")
-    return reddit_ok
+    return True

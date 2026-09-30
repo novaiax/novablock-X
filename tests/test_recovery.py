@@ -156,6 +156,16 @@ class MaintenanceTests(IsolatedTest):
     def test_no_markers_no_pause(self):
         self.assertFalse(recovery.recovery_paused())
 
+    def test_fast_recovery_health_detects_quarantined_or_stale_runtime(self):
+        heartbeat = self.lock.parent / "recovery.heartbeat"
+        self.mock(recovery, "RECOVERY_HEARTBEAT", new=heartbeat)
+        self.assertFalse(recovery.fast_layer_healthy())
+        heartbeat.write_text("alive", encoding="ascii")
+        os.utime(heartbeat, (self.now, self.now))
+        self.assertTrue(recovery.fast_layer_healthy())
+        os.utime(heartbeat, (self.now - 3, self.now - 3))
+        self.assertFalse(recovery.fast_layer_healthy())
+
     def test_active_update_pauses_recovery(self):
         self.marker(self.lock, str(self.now))
         self.assertTrue(recovery.recovery_paused())
@@ -175,12 +185,44 @@ class MaintenanceTests(IsolatedTest):
         self.assertFalse(recovery.shutdown_requested())
         self.assertTrue(self.sentinel.exists())
 
+    def test_unreadable_or_far_future_marker_cannot_pause_recovery(self):
+        self.marker(self.sentinel, "update.bat", age=-60)
+        self.assertFalse(recovery.shutdown_requested())
+        with patch.object(Path, "stat", side_effect=PermissionError("denied")):
+            self.assertFalse(recovery.shutdown_requested())
+
     def test_partial_lock_write_uses_mtime(self):
         self.marker(self.lock, "")
         self.assertTrue(recovery.update_in_progress())
 
 
 class CompanionTests(IsolatedTest):
+    def test_relay_is_copied_only_from_the_bundled_binary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "bundle.exe"
+            target = root / "installed.exe"
+            source.write_bytes(b"trusted relay build")
+            target.write_bytes(b"obsolete")
+            self.mock(companion, "_bundled_helper_path", return_value=source)
+            self.mock(companion, "helper_path", return_value=target)
+            self.mock(companion, "_next_helper_install", new=0.0)
+            self.assertTrue(companion._ensure_helper())
+            self.assertEqual(target.read_bytes(), source.read_bytes())
+            self.assertTrue(companion._ensure_helper())
+
+    def test_recovery_process_uses_neutral_binary(self):
+        self.mock(recovery, "recovery_paused", return_value=False)
+        self.mock(companion, "_ensure_helper", return_value=True)
+        self.mock(companion, "_read_pid", return_value=0)
+        self.mock(companion, "_pending_companion_pid", new=0)
+        self.mock(companion, "_pid_alive", return_value=False)
+        spawn = self.mock(companion, "_spawn", return_value=123)
+        self.assertEqual(companion.spawn_companion(), 123)
+        command = spawn.call_args.args[0]
+        self.assertEqual(command, [str(companion.helper_path()), "--supervise"])
+        self.assertNotIn("novablock", Path(command[0]).name.lower())
+
     def test_spawn_sets_independent_pyinstaller_environment(self):
         popen = self.mock(companion.subprocess, "Popen", return_value=SimpleNamespace(pid=123))
         previous = os.environ.get("PYINSTALLER_RESET_ENVIRONMENT")
@@ -202,6 +244,7 @@ class CompanionTests(IsolatedTest):
 
     def test_pending_bootloader_prevents_spawn_storm(self):
         self.mock(recovery, "recovery_paused", return_value=False)
+        self.mock(companion, "_ensure_helper", return_value=True)
         self.mock(companion, "_read_pid", return_value=0)
         self.mock(companion, "_pending_companion_pid", new=321)
         self.mock(companion, "_pid_alive", side_effect=lambda pid, role="": pid == 321)
@@ -268,6 +311,10 @@ class ProcessProtectionTests(IsolatedTest):
 class RegistrationTests(IsolatedTest):
     def test_tasks_are_replaced_without_delete_gap(self):
         self.mock(main, "_migrate_hosts_if_youtube_present")
+        self.mock(recovery, "shutdown_requested", return_value=False)
+        for name in ("task_exists", "logon_task_matches_current_user",
+                     "startup_registry_matches", "startup_shortcut_present"):
+            self.mock(main.persistence, name, return_value=False)
         installers = [self.mock(main.persistence, name, return_value=True) for name in
                       ("install_scheduled_task", "install_logon_task", "add_startup_registry", "add_startup_shortcut")]
         delete_watchdog = self.mock(main.persistence, "remove_scheduled_task")
@@ -277,6 +324,19 @@ class RegistrationTests(IsolatedTest):
             installer.assert_called_once_with()
         delete_watchdog.assert_not_called()
         delete_app.assert_not_called()
+
+    def test_healthy_persistence_is_not_rewritten_at_each_restart(self):
+        self.mock(main, "_migrate_hosts_if_youtube_present")
+        self.mock(recovery, "shutdown_requested", return_value=False)
+        for name in ("task_exists", "logon_task_matches_current_user",
+                     "startup_registry_matches", "startup_shortcut_present"):
+            self.mock(main.persistence, name, return_value=True)
+        installers = [self.mock(main.persistence, name) for name in
+                      ("install_scheduled_task", "install_logon_task",
+                       "add_startup_registry", "add_startup_shortcut")]
+        main.ensure_persistence()
+        for installer in installers:
+            installer.assert_not_called()
 
 
 if __name__ == "__main__":

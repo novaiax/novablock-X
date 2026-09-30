@@ -1,0 +1,39 @@
+"""The data directory must not keep ProgramData's inherited Users:Write ACE."""
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import win32security
+
+from novablock import paths
+
+
+class DataAclTests(unittest.TestCase):
+    def test_every_existing_entry_gets_only_admin_and_system_full_control(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "state"
+            nested = root / "nested"
+            nested.mkdir(parents=True)
+            (root / "config.dat").write_bytes(b"encrypted")
+            (nested / "main.pid").write_text("123", encoding="ascii")
+            calls = []
+            with patch.object(paths, "PROGRAM_DATA", root), \
+                 patch.object(win32security, "SetNamedSecurityInfo",
+                              side_effect=lambda *args: calls.append(args)):
+                self.assertEqual(paths.secure_program_data(), 4)
+            self.assertEqual({Path(args[0]) for args in calls}, {
+                root, nested, root / "config.dat", nested / "main.pid",
+            })
+            for _name, _object_type, flags, _owner, _group, acl, _sacl in calls:
+                self.assertTrue(flags & win32security.PROTECTED_DACL_SECURITY_INFORMATION)
+                sids = {
+                    win32security.ConvertSidToStringSid(acl.GetAce(index)[2])
+                    for index in range(acl.GetAceCount())
+                }
+                self.assertEqual(sids, {"S-1-5-18", "S-1-5-32-544"})
+
+
+if __name__ == "__main__":
+    unittest.main()

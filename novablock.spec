@@ -6,7 +6,7 @@ block_cipher = None
 a = Analysis(
     ['__main__.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=[('build/relay.exe', '.')],
     datas=[],
     hiddenimports=[
         'pystray._win32',

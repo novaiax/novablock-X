@@ -3,7 +3,7 @@ setlocal DisableDelayedExpansion
 
 REM ============================================================
 REM NovaBlock - update complet depuis la derniere release GitHub
-REM v1.0.36 : updater autonome, coeur + recuperation + SHA256 + dedup DoH
+REM v1.0.37 : updater autonome, coeur + recuperation + SHA256 + dedup DoH
 REM ============================================================
 
 net session >nul 2>&1
@@ -42,7 +42,7 @@ set "LOCK_FILE=%LOCK_DIR%\update.lock"
 set "SENTINEL=%LOCK_DIR%\shutdown.sentinel"
 set "STALE_AFTER=1800"
 set "BASE_URL=https://github.com/novaiax/novablock-X/releases/latest/download"
-set "RECOVERY_TMP=%TEMP%\NovaBlock-update-v136.exe"
+set "RECOVERY_TMP=%TEMP%\NovaBlock-update-v137.exe"
 set "SUMS_TMP=%TEMP%\NovaBlock-SHA256SUMS.txt"
 set "LOCAL_MODE=0"
 set "CORE_SWAPPED=0"
@@ -184,14 +184,14 @@ if errorlevel 1 (
     for /f %%r in ('powershell -NoProfile -Command "$r=Get-Content -LiteralPath '%LOCK_DIR%\firewall-repair-report.json' -Raw | ConvertFrom-Json; if($r.reboot_required){1}else{0}"') do set "FIREWALL_REBOOT=%%r"
 )
 
-REM ----- 6. Installer/reparer la couche v1.0.36 -----
-echo [6/8] Installation/reparation de la recuperation v1.0.36...
+REM ----- 6. Installer/reparer la couche v1.0.37 -----
+echo [6/8] Installation/reparation de la recuperation v1.0.37...
 "%RECOVERY_TMP%" --repair
 if errorlevel 1 (
     echo   [ERROR] La couche de recuperation n'a pas passe son controle de sante.
     goto :cleanup_fail
 )
-echo   [OK] Recuperation v1.0.36 active.
+echo   [OK] Recuperation v1.0.37 active.
 
 REM ----- 7. Relancer le coeur dans la session interactive -----
 echo [7/8] Relance interactive de NovaBlock...
@@ -266,9 +266,9 @@ if not "!HTTPS_ERROR!"=="0" (
 
 "%RECOVERY_TMP%" --status >nul 2>&1
 if errorlevel 1 (
-    echo   [PROBLEME] Recuperation v1.0.36 non saine.
+    echo   [PROBLEME] Recuperation v1.0.37 non saine.
     set /a HEALTH+=1
-) else echo   [OK] Recuperation v1.0.36 saine
+) else echo   [OK] Recuperation v1.0.37 saine
 
 tasklist /FI "IMAGENAME eq NovaBlock.exe" /NH 2>nul | find /I "NovaBlock.exe" >nul
 if errorlevel 1 (
@@ -318,19 +318,26 @@ goto :cleanup_fail
 
 :cleanup_fail
 >> "%LOCK_DIR%\update-launch.log" echo [%date% %time%] failed core_swapped=%CORE_SWAPPED%
+set "ROLLBACK_OK=1"
 if "%CORE_SWAPPED%"=="1" if exist "%PREVIOUS_FILE%" (
     copy /Y "%PREVIOUS_FILE%" "%INSTALL_PATH%" >nul 2>&1
-    if not errorlevel 1 echo   [OK] Coeur precedent restaure.
+    if errorlevel 1 (
+        set "ROLLBACK_OK=0"
+        echo   [ERROR] Le coeur precedent n'a pas pu etre restaure.
+    ) else echo   [OK] Coeur precedent restaure.
 )
 del "%LOCK_FILE%" >nul 2>&1
 del "%SENTINEL%" >nul 2>&1
 schtasks /Run /TN NovaBlockApp >nul 2>&1
+if errorlevel 1 (set "APP_RESTART_REQUESTED=0") else (set "APP_RESTART_REQUESTED=1")
 schtasks /Run /TN NovaBlockWatchdog >nul 2>&1
 if exist "%TMP_FILE%" del /F /Q "%TMP_FILE%" >nul 2>&1
 del /F /Q "%RECOVERY_TMP%" "%SUMS_TMP%" >nul 2>&1
 echo.
 echo ============================================================
-echo Mise a jour interrompue proprement. L'installation precedente a ete rearmee.
+echo Mise a jour interrompue. Etat du coeur precedent : !ROLLBACK_OK!.
+echo Demande de relance interactive : !APP_RESTART_REQUESTED!.
+echo Verifie que NovaBlock est actif avant de refermer cette fenetre.
 echo Journal : %LOCK_DIR%\update-launch.log
 echo ============================================================
 pause

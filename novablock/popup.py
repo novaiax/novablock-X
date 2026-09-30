@@ -36,7 +36,7 @@ class BlockedPopup(BaseBlockedPopup):
         type(self)._active = None
 
     def _close_triggering_tab_and_popup(self) -> None:
-        """Close exactly the tab active in the browser HWND that triggered us."""
+        """Keep the blocker visible until the targeted tab closure is confirmed."""
         # Hide the topmost popup first so Windows can make the browser the
         # foreground keyboard target. Keep the Tk object alive until Ctrl+W
         # has been sent.
@@ -46,12 +46,33 @@ class BlockedPopup(BaseBlockedPopup):
         except Exception:
             pass
         try:
-            tab_close.close_one_tab(self.target_hwnd)
-        finally:
-            try:
+            sent = tab_close.close_one_tab(self.target_hwnd)
+        except Exception:
+            sent = False
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+        except Exception:
+            pass
+        if not sent:
+            self.feedback.config(text="La fermeture de l'onglet n'a pas été confirmée. Réessaie.")
+            return
+        self.root.after(150, lambda: self._confirm_tab_closed(0))
+
+    def _confirm_tab_closed(self, attempts: int) -> None:
+        try:
+            import win32gui
+            if (not win32gui.IsWindow(self.target_hwnd) or
+                    win32gui.GetWindowText(self.target_hwnd).strip() != self.detected_title.strip()):
                 self.root.destroy()
-            except Exception:
-                pass
+                return
+        except Exception:
+            pass
+        if attempts >= 12:
+            self.feedback.config(text="L'onglet semble encore ouvert. NovaBlock reste affiché ; réessaie.")
+            return
+        self.root.after(150, lambda: self._confirm_tab_closed(attempts + 1))
 
     def _build(self) -> None:
         unsupported_uc = self.keyword == "UC Browser non contrôlé"
