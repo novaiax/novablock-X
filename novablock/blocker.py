@@ -100,33 +100,21 @@ FAMILY_DNS_SECONDARY = "1.0.0.3"
 FAMILY_DNS_PRIMARY_V6 = "2606:4700:4700::1113"
 FAMILY_DNS_SECONDARY_V6 = "2606:4700:4700::1003"
 
-# Ordered list of family-safe DNS providers. All of these filter adult content
-# at the DNS level. If the preferred provider (Cloudflare Family) is
-# unreachable from the user's network, we fall back to the next one — but
-# NEVER to DHCP/router DNS (that would defeat the block). The "" entries for
-# v6 mean the provider doesn't offer IPv6, in which case we still set v4 and
-# leave v6 to whatever was there (the Cloudflare v6 fallback above is tried
-# separately).
+# Ordered list of verified family-safe DNS providers. All entries filter adult
+# content at the DNS level on both IP stacks. Providers without their own IPv6
+# Family endpoint are paired with Cloudflare Family IPv6 so Windows can never
+# escape through an unfiltered DHCPv6/router resolver.
 DNS_FALLBACKS = [
     # (name, v4_primary, v4_secondary, v6_primary, v6_secondary)
-    # Quad9 first: less aggressive than Cloudflare Family on category
-    # 'streaming' / 'piracy' so legit streaming sites (movix.cash,
-    # movix.golf, etc.) resolve normally. Still blocks the major porn
-    # domains, which are also caught at the hosts-file layer anyway
-    # (the 50k blocklist contains pornhub/xvideos/xhamster etc.).
-    # Cloudflare Family stays as a fallback if Quad9 is unreachable.
-    ("Quad9 (security + family)",
-     "9.9.9.10", "149.112.112.10",
-     "2620:fe::10", "2620:fe::fe:10"),
     ("Cloudflare Family",
      "1.1.1.3", "1.0.0.3",
      "2606:4700:4700::1113", "2606:4700:4700::1003"),
-    ("OpenDNS FamilyShield",
-     "208.67.222.123", "208.67.220.123",
-     "", ""),
     ("CleanBrowsing Family",
      "185.228.168.168", "185.228.169.168",
      "2a0d:2a00:1::", "2a0d:2a00:2::"),
+    ("OpenDNS FamilyShield",
+     "208.67.222.123", "208.67.220.123",
+     FAMILY_DNS_PRIMARY_V6, FAMILY_DNS_SECONDARY_V6),
 ]
 
 
@@ -563,8 +551,8 @@ def list_active_interfaces() -> list[str]:
 
 def set_family_dns() -> int:
     """Force a reachable family-safe DNS on BOTH IPv4 and IPv6 stacks of each
-    active interface. Tries Cloudflare Family first, falls back to OpenDNS /
-    Quad9 / CleanBrowsing if Cloudflare is unreachable from this network.
+    active interface. Tries Cloudflare Family first, then verified family-only
+    CleanBrowsing and OpenDNS endpoints.
 
     Critical: if `netsh set dns` times out (the Windows DNS Client service is
     saturated — happens during heavy network load like OBS streaming), we

@@ -22,9 +22,12 @@ def run(report_path: str) -> int:
         import win32security
         import psutil
         import tkinter
-        from . import single_instance, process_protect, companion
+        import comtypes
+        from pywinauto import Desktop
+        from . import single_instance, process_protect, companion, monitor
         checks = result["checks"]
         checks["native_dependencies"] = bool(win32api.GetCurrentProcessId() and psutil.pid_exists(os.getpid()))
+        checks["uia_dependencies"] = bool(comtypes and Desktop and monitor.HAS_UIA and monitor.Desktop)
         old_name = single_instance.MUTEX_NAME
         single_instance.MUTEX_NAME = "Local\\NovaBlock_ReleaseTest_" + uuid.uuid4().hex
         try:

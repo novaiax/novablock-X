@@ -6,6 +6,7 @@ dismissal we restore/focus that same browser window and send one Ctrl+F4.
 """
 import ctypes
 import logging
+import threading
 import time
 from ctypes import wintypes
 
@@ -15,6 +16,35 @@ SW_RESTORE = 9
 VK_CONTROL = 0x11
 VK_F4 = 0x73
 KEYEVENTF_KEYUP = 0x0002
+RECENT_CLOSE_SUPPRESSION_SEC = 1.5
+
+_recent_closes: dict[int, float] = {}
+_recent_closes_lock = threading.Lock()
+
+
+def _remember_close(hwnd: int) -> None:
+    """Record a sent close chord and prune expired window entries."""
+    now = time.monotonic()
+    with _recent_closes_lock:
+        stale = [key for key, sent_at in _recent_closes.items() if now - sent_at > 5.0]
+        for key in stale:
+            _recent_closes.pop(key, None)
+        _recent_closes[hwnd] = now
+
+
+def close_recently_sent(hwnd: int) -> bool:
+    """Return whether a close chord was just sent to this browser window."""
+    if not hwnd:
+        return False
+    now = time.monotonic()
+    with _recent_closes_lock:
+        sent_at = _recent_closes.get(hwnd)
+        if sent_at is None:
+            return False
+        if now - sent_at <= RECENT_CLOSE_SUPPRESSION_SEC:
+            return True
+        _recent_closes.pop(hwnd, None)
+        return False
 
 
 def close_one_tab(hwnd: int) -> bool:
@@ -75,6 +105,7 @@ def close_one_tab(hwnd: int) -> bool:
         user32.keybd_event(VK_F4, 0, 0, 0)
         user32.keybd_event(VK_F4, 0, KEYEVENTF_KEYUP, 0)
         user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+        _remember_close(hwnd)
         log.info("Sent one Ctrl+F4 to browser hwnd=%s pid=%s", hwnd, pid.value)
         return True
     except Exception as e:
