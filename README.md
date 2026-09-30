@@ -4,11 +4,11 @@ NovaBlock est un bloqueur Windows de contenu adulte et de distractions, avec plu
 
 ## Version actuelle
 
-**v1.0.34 (candidate de réparation, non publiée)**
+**v1.0.34**
 
 La v1.0.34 part du cœur v1.0.33, ajoute la couche de récupération v5 validée en conditions réelles et corrige le démarrage interactif ainsi que la sélection du DNS familial.
 
-La publication publique reste volontairement bloquée jusqu'à validation réelle d'un redémarrage Windows complet. Le workflow GitHub construit les artefacts sur les branches de réparation, mais une release exige désormais un déclenchement manuel explicite depuis `main`.
+La publication exige la réussite des tests Windows et la vérification d'un redémarrage complet. Le workflow GitHub construit les artefacts, puis publie uniquement après un déclenchement manuel explicite depuis `main`.
 
 Lors du test réel ayant servi de référence, une fermeture forcée de l'application principale a été suivie d'un retour en moins d'une seconde. La v5 réduit aussi la fenêtre interactive entre la disparition de l'application et son retour en fermant immédiatement les navigateurs, puis en lançant en parallèle la protection réseau fail-closed et la relance.
 
@@ -42,12 +42,11 @@ La release GitHub contient :
 
 | Fichier | Rôle |
 | --- | --- |
-| `NovaBlock.exe` | application principale Windows |
-| `update.exe` | installe ou répare la couche de récupération v1.0.34 |
-| `rollback_1.33.exe` | retire uniquement la couche v1.0.34 et remet en route le socle v1.0.33 |
-| `update.bat` | mise à jour complète depuis la dernière release |
-| `NovaBlock-Outils.zip` | outils d'urgence, réparation, réactivation et diagnostic |
-| `SHA256SUMS.txt` | empreintes SHA-256 des exécutables publiés |
+| [`NovaBlock.exe`](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe) | application principale Windows |
+| [`update.exe`](https://github.com/novaiax/novablock-X/releases/latest/download/update.exe) | installe ou répare la couche de récupération v1.0.34 |
+| [`update.bat`](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat) | mise à jour complète depuis la dernière release |
+| [`NovaBlock-Outils.zip`](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip) | mise à jour, réactivation et diagnostic |
+| [`SHA256SUMS.txt`](https://github.com/novaiax/novablock-X/releases/latest/download/SHA256SUMS.txt) | empreintes SHA-256 des exécutables publiés |
 
 Les binaires de release sont reconstruits par GitHub Actions à partir des sources du dépôt. Les empreintes officielles sont donc celles de `SHA256SUMS.txt` dans chaque release.
 
@@ -100,20 +99,10 @@ Cette séparation évite de reproduire le problème des anciennes expérimentati
 
 `NovaBlock-Outils.zip` contient :
 
-- `EMERGENCY_RESET.bat/.ps1` : procédure de dernier recours avec friction volontaire ;
-- `REACTIVATE.bat/.ps1` : remet les protections et le mécanisme de récupération en état ;
-- `REPARE_INTERNET.ps1` : diagnostique et répare les problèmes réseau connus et vérifie l'état fail-closed ;
+- `REACTIVATE.bat/.ps1` : vérifie et rétablit les protections et le mécanisme de récupération ;
 - `MESURE_BOOT.ps1` : mesure le délai de disponibilité réseau après démarrage ;
-- `unstick_sockets.bat/.ps1` : répare certains états réseau/navigateurs bloqués ;
-- `whitelist_site.bat/.ps1` : ajoute une exception pour un site légitime mal classé ;
-- `update.bat` et `update.exe` : mise à jour et réparation ;
-- `rollback_1.33.exe` : retour contrôlé au socle v1.0.33.
-
-`REACTIVATE` et `REPARE_INTERNET` sont compatibles avec la v1.0.34 : ils vérifient aussi la couche de récupération au lieu de supposer que seules les anciennes tâches planifiées existent.
-
-## Retour au socle v1.0.33
-
-`rollback_1.33.exe` retire la couche de récupération v1.0.34 sans remplacer la configuration ni désinstaller NovaBlock. Le cœur v1.0.33 reste le filet de secours et est relancé à la fin de l'opération.
+- `update.bat`, `elevate_update.ps1` et `update.exe` : mise à jour et réparation ;
+- `LISEZ-MOI.txt` : instructions correspondant aux fichiers de l'archive.
 
 ## Build et validation
 
@@ -124,7 +113,7 @@ La CI Windows effectue avant publication :
 - compilation PyInstaller de `NovaBlock.exe` ;
 - autotest runtime du binaire compilé ;
 - `gofmt` et `go vet` de la couche de récupération ;
-- compilation Windows x64 de `update.exe` et `rollback_1.33.exe` ;
+- compilation Windows x64 de `update.exe` ;
 - tests statiques de cohérence release/outils ;
 - génération des empreintes SHA-256 ;
 - création de l'archive d'outils ;
@@ -148,7 +137,6 @@ go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd\recovery
 gofmt -w cmd\recovery\main_windows.go
 go vet ./...
 go build -trimpath -ldflags="-s -w" -o ..\dist-release\update.exe .\cmd\recovery
-go build -trimpath -ldflags="-s -w -X main.defaultAction=rollback" -o ..\dist-release\rollback_1.33.exe .\cmd\recovery
 ```
 
 Pour installer localement les deux binaires construits, sans dépendre d'une release GitHub :
@@ -161,7 +149,7 @@ Le mode local calcule et vérifie ses propres empreintes, utilise le même arrê
 
 ### Validation réelle avant publication
 
-La candidate n'est publiable qu'après validation de tous les points suivants sur Windows :
+Chaque nouvelle release exige la validation des points suivants sur Windows :
 
 - lancement manuel dans la session utilisateur avec fenêtre, zone de notification et popup ;
 - blocage effectif, DNS familial IPv4/IPv6 et Internet bénin toujours disponible ;

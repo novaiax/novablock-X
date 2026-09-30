@@ -18,6 +18,13 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertNotIn("Set-DnsClientServerAddress", src)
         self.assertNotIn("ipconfig", src.lower())
 
+    def test_recovery_has_no_direct_disable_or_downgrade_action(self):
+        src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
+        self.assertNotIn('case "--maintenance-pause"', src)
+        self.assertNotIn('case "--rollback"', src)
+        self.assertNotIn("func maintenancePause()", src)
+        self.assertNotIn("func rollback()", src)
+
     def test_recovery_requires_interactive_task_and_cleans_predecessors(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
         install = src[src.index("func installOrRepair()") : src.index("func installSelfCopy()")]
@@ -84,38 +91,41 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertIn('checks["uia_dependencies"]', src)
         self.assertIn("monitor.HAS_UIA", src)
 
-    def test_emergency_and_reactivation_are_v134_aware(self):
-        emergency = (ROOT / "outils" / "EMERGENCY_RESET.ps1").read_text(encoding="utf-8", errors="replace")
+    def test_reactivation_is_v134_aware(self):
         reactivate = (ROOT / "outils" / "REACTIVATE.ps1").read_text(encoding="utf-8", errors="replace")
-        repair = (ROOT / "outils" / "REPARE_INTERNET.ps1").read_text(encoding="utf-8", errors="replace")
-        self.assertIn("--maintenance-pause", emergency)
         self.assertIn("--repair", reactivate)
         self.assertIn("--status", reactivate)
         self.assertIn("Start-ScheduledTask -TaskName 'NovaBlockApp'", reactivate)
         self.assertIn("DNS familiaux IPv4 et IPv6 actifs", reactivate)
         self.assertIn("https://example.com", reactivate)
         self.assertNotIn("9.9.9.11", reactivate)
-        self.assertIn("--repair-network", repair)
 
-    def test_workflow_builds_and_publishes_all_v134_assets(self):
+    def test_workflow_builds_and_publishes_protected_v134_assets(self):
         wf = (ROOT / ".github" / "workflows" / "windows-release.yml").read_text(encoding="utf-8")
-        for expected in ("actions/setup-go@v5", "go vet ./...", "update.exe", "rollback_1.33.exe", "SHA256SUMS.txt"):
+        for expected in ("actions/setup-go@v5", "go vet ./...", "update.exe", "SHA256SUMS.txt"):
             self.assertIn(expected, wf)
-        self.assertIn("fix/startup-ui-recovery", wf)
+        self.assertIn("release/v1.0.34-publication", wf)
         self.assertIn("github.com/tc-hib/go-winres@v0.3.3", wf)
         self.assertIn("--manifest cli --admin", wf)
         self.assertIn("publish_release:", wf)
         self.assertIn("github.event_name == 'workflow_dispatch'", wf)
         self.assertIn("inputs.publish_release == true", wf)
 
+        package = wf[wf.index("- name: Package tools and checksums") : wf.index("- uses: actions/upload-artifact@v4")]
+        self.assertIn("$safeTools = @(", package)
+        self.assertNotIn("Copy-Item outils/*", package)
+        for name in ("EMERGENCY_RESET", "REPARE_INTERNET", "unstick_sockets", "whitelist_site", "rollback_1.33"):
+            self.assertNotIn(name, package)
+        self.assertNotIn("rollback_1.33.exe", wf)
+
     def test_docs_record_startup_fix_and_release_gate(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
 
         self.assertIn("session Windows 0", readme)
-        self.assertIn("candidate de réparation, non publiée", readme)
+        self.assertIn("**v1.0.34**", readme)
         self.assertIn("update.bat --local", readme)
-        self.assertIn("validation d'un redémarrage Windows complet", notes)
+        self.assertIn("redémarrage Windows complet", notes)
         self.assertIn("publication n'est plus automatique", notes)
 
 

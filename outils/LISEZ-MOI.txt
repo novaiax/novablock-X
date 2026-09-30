@@ -1,47 +1,23 @@
-NovaBlock v1.0.34 - Outils de secours
-=====================================
+NovaBlock v1.0.34 - Mise a jour et reactivation
+===============================================
 
-IMPORTANT : garde les fichiers du ZIP ensemble. Les .bat appellent les .ps1
-places a cote d'eux, et les outils v1.0.34 utilisent update.exe pour verifier
-ou reparer le mecanisme de recuperation.
+Garde les fichiers de cette archive dans le meme dossier. Les fichiers .bat
+appellent les scripts .ps1 places a cote d'eux. Les droits administrateur sont
+demandes quand ils sont necessaires.
 
-Double-clic sur le .bat correspondant. Les droits administrateur sont demandes
-quand ils sont necessaires.
-
-EMERGENCY_RESET.bat / .ps1
-    Dernier recours lorsque NovaBlock ou le reseau est dans un etat inutilisable.
-    La procedure garde sa friction volontaire : fenetre horaire + code aleatoire
-    de 30 caracteres a retaper manuellement. La v1.0.34 suspend d'abord proprement
-    le mecanisme de recuperation avant le nettoyage.
-
-REACTIVATE.bat / .ps1
-    Remet NovaBlock en route apres un EMERGENCY_RESET. Reactive le pare-feu,
-    les taches, le coeur NovaBlock et repare/verifie aussi la recuperation v1.0.34.
-
-REPARE_INTERNET.ps1
-    Diagnostique un demarrage reseau lent, les anciennes regles dupliquees,
-    certaines migrations hosts coincees et les etats reseau residuels. En v1.0.34,
-    il verifie aussi qu'un etat fail-closed temporaire n'est pas reste bloque.
-
-unstick_sockets.bat / .ps1
-    Repare certains navigateurs qui ne chargent plus alors que la connexion existe.
-
-whitelist_site.bat / .ps1
-    Debloque un site legitime mal classe par le filtrage familial.
-
-MESURE_BOOT.ps1
-    Mesure le temps entre le demarrage de Windows et la disponibilite du reseau.
-
-update.bat
-    Met a jour NovaBlock depuis GitHub, verifie les SHA-256, remplace le coeur,
-    installe/repare la couche v1.0.34 puis controle les heartbeats.
+update.bat / elevate_update.ps1
+    Telecharge la derniere release officielle, verifie les empreintes SHA-256,
+    installe l'application et repare la couche de recuperation.
 
 update.exe
-    Installe/repare la couche de recuperation v1.0.34. Il est aussi utilise par
-    REACTIVATE et REPARE_INTERNET.
+    Installe ou repare la couche de recuperation v1.0.34. Son etat peut etre
+    verifie apres l'installation.
 
-rollback_1.33.exe
-    Retire uniquement la couche v1.0.34 et relance le socle sain v1.0.33.
-    La configuration NovaBlock est conservee.
+REACTIVATE.bat / REACTIVATE.ps1
+    Verifie et remet en route les protections, la tache interactive et le
+    mecanisme de recuperation.
 
-Depot : https://github.com/novaiax/novablock-X
+MESURE_BOOT.ps1
+    Mesure le delai entre le demarrage de Windows et la disponibilite du reseau.
+
+Depot et documentation : https://github.com/novaiax/novablock-X

@@ -1,8 +1,8 @@
 # ============================================================
 # NovaBlock - REACTIVATE v1.0.34
 # ============================================================
-# Remet en route NovaBlock apres un EMERGENCY_RESET et verifie
-# egalement la couche de recuperation v1.0.34.
+# Remet en route NovaBlock et verifie egalement la couche
+# de recuperation v1.0.34.
 # ============================================================
 
 $ErrorActionPreference = 'Continue'

@@ -180,10 +180,6 @@ func main() {
 		err = installOrRepair()
 	case "--repair-network", "repair-network":
 		err = repairNetworkState()
-	case "--maintenance-pause", "maintenance-pause":
-		err = maintenancePause()
-	case "--rollback", "rollback":
-		err = rollback()
 	case "--service-acl-repair":
 		err = repairServiceACLAsSystem()
 	case "--version", "version":
@@ -628,43 +624,6 @@ func waitForPredecessorRemoval(max time.Duration) error {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return errors.New("a predecessor recovery component could not be removed")
-}
-
-func maintenancePause() error {
-	if err := requireAdmin(); err != nil {
-		return err
-	}
-	logLine("maintenance pause requested")
-	if err := ensureServiceMaintenanceAccess(); err != nil {
-		return err
-	}
-	runBestEffort("sc.exe", "stop", serviceName)
-	waitForServiceStop(4 * time.Second)
-	runBestEffort("sc.exe", "config", serviceName, "start=", "disabled")
-	setGate(false)
-	return nil
-}
-
-func rollback() error {
-	if err := requireAdmin(); err != nil {
-		return err
-	}
-	logLine("rollback to v1.0.33 base start")
-	if err := ensureServiceMaintenanceAccess(); err != nil {
-		return err
-	}
-	runBestEffort("sc.exe", "stop", serviceName)
-	waitForServiceStop(4 * time.Second)
-	runBestEffort("sc.exe", "delete", serviceName)
-	setGate(false)
-	runBestEffort("netsh", "advfirewall", "firewall", "delete", "rule", "name="+gateRuleName)
-	cleanupPredecessorComponents(false)
-	_ = os.Remove(heartbeatPath())
-	_ = os.Remove(installedPath())
-	runBestEffort("schtasks", "/Run", "/TN", appTaskName)
-	logLine("rollback complete")
-	fmt.Println("Retour au socle NovaBlock v1.0.33: OK")
-	return nil
 }
 
 func repairNetworkState() error {

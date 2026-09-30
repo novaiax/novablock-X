@@ -50,7 +50,7 @@ if exist "%LOCK_FILE%" (
     if !LOCK_AGE! lss 0 set LOCK_AGE=0
     if !LOCK_AGE! lss %STALE_AFTER% (
         echo [ERROR] Une autre mise a jour semble deja active ^(!LOCK_AGE! s^).
-        echo Lance REPARE_INTERNET.ps1 si une ancienne mise a jour s'est interrompue.
+        echo Verifie que la mise a jour precedente est terminee avant de relancer.
         pause
         exit /b 1
     )
