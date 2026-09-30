@@ -1,12 +1,17 @@
+import base64
+import os
 import pathlib
+import re
+import subprocess
+import tempfile
 import unittest
 
 
 class UpdateScriptTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.text = pathlib.Path('outils/update.bat').read_text(encoding='utf-8', errors='ignore').lower()
-        cls.elevation = pathlib.Path('outils/elevate_update.ps1').read_text(encoding='utf-8', errors='ignore').lower()
+        cls.source = pathlib.Path('outils/update.bat').read_text(encoding='utf-8', errors='ignore')
+        cls.text = cls.source.lower()
 
     def test_waits_for_process_exit_before_swap(self):
         self.assertIn('wait_process_exit', self.text)
@@ -27,17 +32,47 @@ class UpdateScriptTests(unittest.TestCase):
 
     def test_local_verified_install_mode_exists(self):
         self.assertIn('if /i "%~1"=="--local"', self.text)
-        self.assertIn('elevate_update.ps1', self.text)
-        self.assertIn('-localapp "%~f2" -localrecovery "%~f3"', self.text)
+        self.assertIn('nb_updater_local_app=%~f2', self.text)
+        self.assertIn('nb_updater_local_recovery=%~f3', self.text)
         self.assertIn('get-filehash', self.text)
         self.assertIn('local_app', self.text)
         self.assertIn('local_recovery', self.text)
 
-    def test_elevation_relay_preserves_spaced_paths(self):
-        self.assertIn('-encodedcommand', self.elevation)
-        self.assertIn("replace(\"'\", \"''\")", self.elevation)
-        self.assertIn("'--local'", self.elevation)
-        self.assertIn('$lastExitCode'.lower(), self.elevation)
+    def test_single_file_elevation_preserves_spaced_and_quoted_paths(self):
+        self.assertNotIn('elevate_update.ps1', self.text)
+        self.assertIn('-encodedcommand', self.text)
+        self.assertIn('-verb runas', self.text)
+        self.assertIn('pause', self.text)
+        line = next(line for line in self.source.splitlines()
+                    if line.startswith('powershell -NoProfile -ExecutionPolicy Bypass -Command'))
+        command = re.search(r'-Command "(.*)"$', line).group(1)
+        with tempfile.TemporaryDirectory() as temporary:
+            capture = pathlib.Path(temporary) / 'encoded.txt'
+            for local in (False, True):
+                env = os.environ.copy()
+                env.update({
+                    'NB_UPDATER_SCRIPT': r"C:\Temp\Yann's folder\update.bat",
+                    'NB_UPDATER_LOCAL_MODE': '1' if local else '0',
+                    'NB_UPDATER_LOCAL_APP': r"C:\Temp\Yann's folder\NovaBlock.exe" if local else '',
+                    'NB_UPDATER_LOCAL_RECOVERY': r"C:\Temp\Yann's folder\update.exe" if local else '',
+                    'NB_CAPTURE_PATH': str(capture),
+                })
+                stub = ('function Start-Process { [CmdletBinding()] '
+                        'param([string]$FilePath,[string[]]$ArgumentList,[string]$Verb) '
+                        '[IO.File]::WriteAllText($env:NB_CAPTURE_PATH,$ArgumentList[-1]) }; ')
+                result = subprocess.run(
+                    ['powershell.exe', '-NoProfile', '-Command', stub + command],
+                    env=env, capture_output=True, text=True, timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                body = base64.b64decode(capture.read_text()).decode('utf-16le')
+                self.assertIn(r"& 'C:\Temp\Yann''s folder\update.bat'", body)
+                self.assertIn('exit $LASTEXITCODE', body)
+                if local:
+                    self.assertIn(r"'--local' 'C:\Temp\Yann''s folder\NovaBlock.exe'", body)
+                    self.assertIn(r"'C:\Temp\Yann''s folder\update.exe'", body)
+                else:
+                    self.assertNotIn('--local', body)
 
     def test_local_checksum_commands_do_not_leak_cmd_caret_into_powershell(self):
         self.assertIn('[io.file]::writealllines', self.text)
@@ -60,6 +95,9 @@ class UpdateScriptTests(unittest.TestCase):
         self.assertIn('[void][system.net.dns]::gethostaddresses', self.text)
         self.assertNotIn("gethostaddresses('www.google.com')^|out-null", self.text)
         self.assertIn('https://example.com', self.text)
+        self.assertIn('get-netadapterbinding', self.text)
+        self.assertIn('$v4 -notcontains $ip', self.text)
+        self.assertIn('$v6 -notcontains $ip', self.text)
 
     def test_update_repairs_duplicate_firewall_rules_before_relaunch(self):
         self.assertIn('start "" /wait "%install_path%" --repair-firewall', self.text)

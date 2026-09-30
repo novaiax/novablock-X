@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	releaseVersion = "v1.0.35"
+	releaseVersion = "v1.0.36"
 
 	// Internal identifiers are intentionally kept out of user-facing docs.
 	serviceName   = "AegisRecovery_7C31"
@@ -119,13 +119,14 @@ var (
 )
 
 var browserNames = map[string]struct{}{
-	"chrome.exe":    {},
-	"msedge.exe":    {},
-	"brave.exe":     {},
-	"firefox.exe":   {},
-	"opera.exe":     {},
-	"vivaldi.exe":   {},
-	"ucbrowser.exe": {},
+	"chrome.exe":            {},
+	"msedge.exe":            {},
+	"brave.exe":             {},
+	"firefox.exe":           {},
+	"opera.exe":             {},
+	"vivaldi.exe":           {},
+	"ucbrowser.exe":         {},
+	"ucbrowserlauncher.exe": {},
 }
 
 var predecessorServices = []string{
@@ -194,12 +195,12 @@ func main() {
 		logLine("ERROR: %v", err)
 		fmt.Fprintln(os.Stderr, err)
 		if interactiveLaunch {
-			showMessage("NovaBlock v1.0.35 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
+			showMessage("NovaBlock v1.0.36 - echec", "La reparation a echoue :\n\n"+err.Error(), true)
 		}
 		os.Exit(1)
 	}
 	if interactiveLaunch {
-		showMessage("NovaBlock v1.0.35", "Installation et controle de sante termines avec succes.", false)
+		showMessage("NovaBlock v1.0.36", "Installation et controle de sante termines avec succes.", false)
 	}
 }
 
@@ -315,7 +316,7 @@ func installOrRepair() error {
 			setGate(false)
 		}
 		logLine("install/repair already healthy")
-		fmt.Println("NovaBlock v1.0.35 recovery layer: OK")
+		fmt.Println("NovaBlock v1.0.36 recovery layer: OK")
 		return nil
 	}
 
@@ -353,7 +354,7 @@ func installOrRepair() error {
 		setGate(false)
 	}
 	logLine("install/repair complete")
-	fmt.Println("NovaBlock v1.0.35 recovery layer: OK")
+	fmt.Println("NovaBlock v1.0.36 recovery layer: OK")
 	return nil
 }
 
@@ -685,7 +686,7 @@ func statusCheck() error {
 	if !freshHeartbeat(2 * time.Second) {
 		return errors.New("recovery heartbeat is not fresh")
 	}
-	fmt.Println("NovaBlock v1.0.35 recovery layer: healthy")
+	fmt.Println("NovaBlock v1.0.36 recovery layer: healthy")
 	return nil
 }
 

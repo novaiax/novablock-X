@@ -58,6 +58,7 @@ DEFAULTS: dict[str, Any] = {
     "custom_popup_domains": [],
     "custom_popup_urls": [],
     "custom_popup_only_migrated": False,
+    "default_popup_sites_seeded": False,
     "machine_name": "",
 }
 
@@ -144,6 +145,25 @@ def migrate_custom_sites_to_popup_only() -> bool:
     cfg["custom_popup_only_migrated"] = True
     save(cfg)
     return True
+
+
+def ensure_default_popup_sites() -> int:
+    """Add the protected default popup sites once to an existing installation.
+
+    The marker lets a valid code-based removal remain effective afterwards.
+    Existing personal sites and precise URLs are retained.
+    """
+    cfg = load()
+    if not cfg.get("code_hash") or not cfg.get("install_ts"):
+        return 0
+    if cfg.get("default_popup_sites_seeded"):
+        return 0
+    domains = _combined_popup_domains(cfg)
+    missing = [domain for domain in DEFAULT_POPUP_DOMAINS if domain not in domains]
+    cfg["custom_popup_domains"] = domains + missing
+    cfg["default_popup_sites_seeded"] = True
+    save(cfg)
+    return len(missing)
 
 
 def add_custom_domain(domain: str) -> str:
@@ -265,6 +285,7 @@ def load() -> dict[str, Any]:
     if not CONFIG_FILE.exists():
         fresh = DEFAULTS.copy()
         fresh["custom_popup_domains"] = list(DEFAULT_POPUP_DOMAINS)
+        fresh["default_popup_sites_seeded"] = True
         return fresh
     try:
         blob = CONFIG_FILE.read_bytes()

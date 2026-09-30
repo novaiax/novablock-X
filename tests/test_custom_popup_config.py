@@ -24,6 +24,7 @@ class CustomPopupConfigTests(unittest.TestCase):
             self.assertEqual(set(fresh["custom_popup_domains"]), expected)
             self.assertEqual(len(fresh["custom_popup_domains"]), 17)
             self.assertNotIn("reddit.com", fresh["custom_popup_domains"])
+            self.assertTrue(fresh["default_popup_sites_seeded"])
             fresh["custom_popup_domains"].append("example.com")
             self.assertEqual(set(config.load()["custom_popup_domains"]), expected)
 
@@ -39,6 +40,27 @@ class CustomPopupConfigTests(unittest.TestCase):
         with patch.object(config, "CONFIG_FILE", ExistingConfig()), \
              patch.object(config, "decrypt_machine", return_value=json.dumps(stored).encode()):
             self.assertEqual(config.load()["custom_popup_domains"], [])
+
+    def test_update_adds_missing_defaults_once_and_keeps_existing_sites(self):
+        existing = {
+            "code_hash": "installed", "install_ts": 1,
+            "custom_popup_domains": ["example.org", config.DEFAULT_POPUP_DOMAINS[0]],
+            "custom_popup_urls": ["https://example.org/path"],
+            "default_popup_sites_seeded": False,
+        }
+        with patch.object(config, "load", return_value=existing), \
+             patch.object(config, "save") as save:
+            self.assertEqual(config.ensure_default_popup_sites(), 16)
+            self.assertEqual(config.ensure_default_popup_sites(), 0)
+            save.assert_called_once_with(existing)
+        self.assertEqual(len(existing["custom_popup_domains"]), 18)
+        self.assertIn("example.org", existing["custom_popup_domains"])
+        self.assertEqual(existing["custom_popup_urls"], ["https://example.org/path"])
+        self.assertTrue(existing["default_popup_sites_seeded"])
+        existing["custom_popup_domains"].remove(config.DEFAULT_POPUP_DOMAINS[0])
+        with patch.object(config, "load", return_value=existing), patch.object(config, "save") as save:
+            self.assertEqual(config.ensure_default_popup_sites(), 0)
+            save.assert_not_called()
 
     def test_movix_cash_cannot_be_added(self):
         self.assertEqual(config.add_custom_domain("movix.cash"), "")

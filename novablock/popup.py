@@ -54,12 +54,14 @@ class BlockedPopup(BaseBlockedPopup):
                 pass
 
     def _build(self) -> None:
+        unsupported_uc = self.keyword == "UC Browser non contrôlé"
         wrap = tk.Frame(self.root, bg=PRIMARY)
         wrap.pack(expand=True)
         card = tk.Frame(wrap, bg="white", padx=48, pady=40)
         card.pack(padx=40, pady=40)
         tk.Label(card, text="🚫", font=("Segoe UI", 72), bg="white", fg=PRIMARY).pack()
-        tk.Label(card, text="Contenu bloqué", font=("Segoe UI", 28, "bold"),
+        tk.Label(card, text="Navigateur fermé" if unsupported_uc else "Contenu bloqué",
+                 font=("Segoe UI", 28, "bold"),
                  fg=PRIMARY, bg="white").pack(pady=(0, 8))
         tk.Label(card,
                  text=f"Détection : « {self.keyword} »",
@@ -77,9 +79,10 @@ class BlockedPopup(BaseBlockedPopup):
         tk.Button(btns, text="J'ai le code", font=FONT_MD,
                   bg="#fdcb6e", fg=ACCENT, relief="flat", padx=20, pady=10,
                   command=self._enter_code).grid(row=0, column=1, padx=4)
-        tk.Button(btns, text="Fermer l'onglet", font=FONT_SM,
+        tk.Button(btns, text="Fermer" if unsupported_uc else "Fermer l'onglet", font=FONT_SM,
                   bg="#dfe6e9", fg=ACCENT, relief="flat", padx=14, pady=8,
-                  command=self._close_triggering_tab_and_popup).grid(row=0, column=2, padx=4)
+                  command=self.root.destroy if unsupported_uc else self._close_triggering_tab_and_popup).grid(
+                      row=0, column=2, padx=4)
 
         self.feedback = tk.Label(card, text="", font=FONT_SM, fg=MUTED,
                                  bg="white", wraplength=480)

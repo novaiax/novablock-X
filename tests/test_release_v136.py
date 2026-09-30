@@ -5,9 +5,9 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class ReleaseV135Tests(unittest.TestCase):
+class ReleaseV136Tests(unittest.TestCase):
     def test_release_version(self):
-        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.35")
+        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.36")
 
     def test_recovery_fast_path_contract(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
@@ -16,6 +16,8 @@ class ReleaseV135Tests(unittest.TestCase):
         self.assertIn("closeBrowsersNative()", src)
         self.assertIn("go func() { setGate(true)", src)
         self.assertIn("go requestAppRestart()", src)
+        self.assertRegex(src, r'"ucbrowser\.exe":\s*\{\}')
+        self.assertRegex(src, r'"ucbrowserlauncher\.exe":\s*\{\}')
         self.assertNotIn("Set-DnsClientServerAddress", src)
         self.assertNotIn("ipconfig", src.lower())
 
@@ -57,8 +59,8 @@ class ReleaseV135Tests(unittest.TestCase):
     def test_double_click_reports_success_or_failure(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
         self.assertIn("interactiveLaunch := len(os.Args) == 1", src)
-        self.assertIn('showMessage("NovaBlock v1.0.35 - echec"', src)
-        self.assertIn('showMessage("NovaBlock v1.0.35", "Installation et controle de sante termines avec succes."', src)
+        self.assertIn('showMessage("NovaBlock v1.0.36 - echec"', src)
+        self.assertIn('showMessage("NovaBlock v1.0.36", "Installation et controle de sante termines avec succes."', src)
         self.assertIn('user32.NewProc("MessageBoxW")', src)
 
     def test_partial_install_acl_is_repaired_only_as_local_system(self):
@@ -94,9 +96,9 @@ class ReleaseV135Tests(unittest.TestCase):
         self.assertIn('checks["uia_dependencies"]', src)
         self.assertIn("monitor.HAS_UIA", src)
 
-    def test_reactivation_is_v135_aware(self):
+    def test_reactivation_is_v136_aware(self):
         reactivate = (ROOT / "outils" / "REACTIVATE.ps1").read_text(encoding="utf-8", errors="replace")
-        self.assertIn("v1.0.35", reactivate)
+        self.assertIn("v1.0.36", reactivate)
         self.assertIn("--repair", reactivate)
         self.assertIn("--status", reactivate)
         self.assertIn("Start-ScheduledTask -TaskName 'NovaBlockApp'", reactivate)
@@ -124,11 +126,11 @@ class ReleaseV135Tests(unittest.TestCase):
         self.assertIn("--repair-firewall", internet)
         self.assertNotIn("$kw.deletevalue", internet)
 
-    def test_workflow_builds_and_publishes_v135_assets(self):
+    def test_workflow_builds_and_publishes_v136_assets(self):
         wf = (ROOT / ".github" / "workflows" / "windows-release.yml").read_text(encoding="utf-8")
         for expected in ("actions/setup-go@v5", "go vet ./...", "update.exe", "SHA256SUMS.txt"):
             self.assertIn(expected, wf)
-        self.assertIn("release/v1.0.35-recovery-tools", wf)
+        self.assertIn("release/v1.0.36-single-updater", wf)
         self.assertIn("github.com/tc-hib/go-winres@v0.3.3", wf)
         self.assertIn("--manifest cli --admin", wf)
         self.assertIn("publish_release:", wf)
@@ -144,7 +146,7 @@ class ReleaseV135Tests(unittest.TestCase):
             "LISEZ-MOI.txt", "EMERGENCY_RESET.bat", "EMERGENCY_RESET.ps1",
             "REACTIVATE.bat", "REACTIVATE.ps1", "REPARE_INTERNET.ps1",
             "MESURE_BOOT.ps1", "unstick_sockets.bat", "unstick_sockets.ps1",
-            "whitelist_site.bat", "whitelist_site.ps1", "elevate_update.ps1",
+            "whitelist_site.bat", "whitelist_site.ps1",
             "update.bat",
         })
         self.assertNotIn("rollback_1.33.exe", wf)
@@ -154,10 +156,10 @@ class ReleaseV135Tests(unittest.TestCase):
         notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
 
         self.assertIn("session Windows 0", readme)
-        self.assertIn("**v1.0.35**", readme)
+        self.assertIn("**v1.0.36**", readme)
         self.assertIn("update.bat --local", readme)
         self.assertIn("78 règles", notes)
-        self.assertIn("déclenchement manuel", notes)
+        self.assertIn("publication manuelle", notes)
 
 
 if __name__ == "__main__":

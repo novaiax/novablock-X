@@ -1,8 +1,8 @@
 # ============================================================
-# NovaBlock - REACTIVATE v1.0.35
+# NovaBlock - REACTIVATE v1.0.36
 # ============================================================
 # Remet en route NovaBlock et verifie egalement la couche
-# de recuperation v1.0.35.
+# de recuperation v1.0.36.
 # ============================================================
 
 $ErrorActionPreference = 'Continue'
@@ -101,7 +101,7 @@ for ($w = 0; $w -lt 36; $w += 2) {
 }
 if (-not $frais) { Souci "heartbeat principal non confirme" }
 
-Write-Host "[5] Reparation de la recuperation v1.0.35..." -ForegroundColor Cyan
+Write-Host "[5] Reparation de la recuperation v1.0.36..." -ForegroundColor Cyan
 $recoveryTool = $null
 $localTool = Join-Path $PSScriptRoot 'update.exe'
 $installedTool = Join-Path $nb 'runtime_7c31.exe'
@@ -116,7 +116,7 @@ if ($recoveryTool) {
         else { Souci "controle de sante de la recuperation echoue" }
     } else { Souci "reparation de la recuperation echouee" }
 } else {
-    Souci "outil v1.0.35 absent; relance update.bat depuis la derniere release"
+    Souci "outil v1.0.36 absent; relance update.bat depuis la derniere release"
 }
 
 Write-Host "[6] Verification reseau et protections..." -ForegroundColor Cyan

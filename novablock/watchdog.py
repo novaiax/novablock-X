@@ -10,7 +10,7 @@ import threading
 import time
 from typing import Callable, Optional
 
-from . import config, blocker, crypto, mailer, browser_policies, firewall, tamper, persistence
+from . import config, blocker, browser_kill, crypto, mailer, browser_policies, firewall, tamper, persistence
 from .paths import HEARTBEAT_FILE, ensure_dirs
 
 log = logging.getLogger("novablock.watchdog")
@@ -112,6 +112,15 @@ class Watchdog:
         cfg = config.load()
         if not cfg.get("install_ts"):
             return
+        if not config.is_temp_unlocked():
+            browser_kill.close_uc_browser_processes()
+        if not cfg.get("default_popup_sites_seeded"):
+            try:
+                added = config.ensure_default_popup_sites()
+                log.info("Default popup site migration complete; added=%d", added)
+                cfg = config.load()
+            except Exception as exc:
+                log.warning("Default popup site migration will retry: %s", exc)
 
         # While a live-streaming app is running, skip DNS-level operations
         # (the Windows DNS Client service is saturated by the stream's RTMP
@@ -136,7 +145,7 @@ class Watchdog:
                     blocker.apply_hosts_block()
                 else:
                     blocker.apply_full_block(kill_browsers=False)
-            elif not blocker.dns_is_locked():
+            elif blocker.dns_is_locked() is False:
                 if streaming:
                     log.info("DNS not locked but streaming detected — skipping DNS re-apply this tick")
                     # Streaming saturates the resolver; don't count this as

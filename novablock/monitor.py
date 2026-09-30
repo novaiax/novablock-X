@@ -12,7 +12,7 @@ import time
 from typing import Callable, Optional
 from urllib.parse import urlsplit
 
-from . import tab_close
+from . import browser_kill, tab_close
 
 try:
     import win32gui
@@ -34,6 +34,7 @@ log = logging.getLogger("novablock.monitor")
 BROWSER_PROCS = {
     "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
     "opera.exe", "vivaldi.exe", "iexplore.exe", "tor.exe",
+    "ucbrowser.exe", "ucbrowserlauncher.exe",
 }
 
 ADULT_KEYWORDS_SUBSTRING = [
@@ -117,11 +118,31 @@ class WindowMonitor:
         if cached and now < cached[0]:
             return cached[1]
         try:
-            ok = psutil.Process(pid).name().lower() in BROWSER_PROCS
+            proc = psutil.Process(pid)
+            name = proc.name().lower()
+            ok = name in BROWSER_PROCS
+            if not ok:
+                try:
+                    ok = browser_kill.is_uc_browser_process(name, proc.exe())
+                except Exception:
+                    pass
         except Exception:
             ok = False
         self._browser_cache[pid] = (now + 5.0, ok)
         return ok
+
+    @staticmethod
+    def _is_uc_browser(pid: int) -> bool:
+        try:
+            proc = psutil.Process(pid)
+            name = proc.name()
+            try:
+                path = proc.exe()
+            except Exception:
+                path = ""
+            return browser_kill.is_uc_browser_process(name, path)
+        except Exception:
+            return False
 
     @staticmethod
     def _normalize_host(raw: str) -> str:
@@ -318,6 +339,18 @@ class WindowMonitor:
                     continue
                 title = win32gui.GetWindowText(hwnd) or ""
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
+                if self._is_uc_browser(pid):
+                    from . import config
+                    if not config.is_temp_unlocked():
+                        log.warning("UC Browser active without verifiable filtering; closing it")
+                        self._cooldown_until = time.monotonic() + 3.0
+                        browser_kill.close_uc_browser_processes()
+                        try:
+                            self.on_detect(title, "UC Browser non contrôlé", hwnd)
+                        except Exception as exc:
+                            log.error("UC Browser warning popup failed: %s", exc)
+                    self._stop.wait(self.poll_interval)
+                    continue
                 if self._is_browser(pid):
                     if tab_close.close_recently_sent(hwnd):
                         self._stop.wait(self.poll_interval)
