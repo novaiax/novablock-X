@@ -23,8 +23,9 @@ class DataAclTests(unittest.TestCase):
                  patch.object(win32security, "SetNamedSecurityInfo",
                               side_effect=lambda *args: calls.append(args)):
                 self.assertEqual(paths.secure_program_data(), 4)
-            self.assertEqual({Path(args[0]) for args in calls}, {
-                root, nested, root / "config.dat", nested / "main.pid",
+            self.assertEqual({Path(args[0]).resolve() for args in calls}, {
+                root.resolve(), nested.resolve(), (root / "config.dat").resolve(),
+                (nested / "main.pid").resolve(),
             })
             for _name, _object_type, flags, _owner, _group, acl, _sacl in calls:
                 self.assertTrue(flags & win32security.PROTECTED_DACL_SECURITY_INFORMATION)
