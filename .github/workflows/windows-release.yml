@@ -143,14 +143,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Remove stale drafts created by previous failed automated releases.
-          $drafts = gh api "repos/$env:GITHUB_REPOSITORY/releases?per_page=100" | ConvertFrom-Json | Where-Object { $_.draft -and $_.author.login -eq 'github-actions[bot]' }
-          foreach ($d in $drafts) {
-            Write-Host "Deleting stale automated draft release $($d.id) ($($d.name))"
-            gh api -X DELETE "repos/$env:GITHUB_REPOSITORY/releases/$($d.id)"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-
           gh release create $env:RELEASE_TAG `
             dist-release/NovaBlock.exe `
             dist-release/update.exe `
