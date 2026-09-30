@@ -79,7 +79,7 @@ jobs:
             if ($errors.Count) { throw "PowerShell parse failed: $name" }
           }
           $resetSource = Get-Content outils/EMERGENCY_RESET.ps1 -Raw
-          $embedded = [regex]::Match($resetSource, "(?s)`$CORE_SCRIPT = @'\r?\n(.*?)\r?\n'@")
+          $embedded = [regex]::Match($resetSource, "(?s)= @'\r?\n(.*?)\r?\n'@")
           if (-not $embedded.Success) { throw 'Embedded emergency script missing' }
           $tokens = $null
           $errors = $null
