@@ -67,7 +67,7 @@ jobs:
         run: |
           foreach ($name in @(
             'EMERGENCY_RESET.ps1', 'REACTIVATE.ps1', 'REPARE_INTERNET.ps1',
-            'unstick_sockets.ps1', 'whitelist_site.ps1', 'MESURE_BOOT.ps1',
+            'unstick_sockets.ps1', 'whitelist_site.ps1', 'MESURE_BOOT.ps1'
           )) {
             $path = Join-Path outils $name
             $tokens = $null
