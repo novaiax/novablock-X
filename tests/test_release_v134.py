@@ -110,6 +110,7 @@ class ReleaseV134Tests(unittest.TestCase):
         self.assertIn("publish_release:", wf)
         self.assertIn("github.event_name == 'workflow_dispatch'", wf)
         self.assertIn("inputs.publish_release == true", wf)
+        self.assertNotIn("gh api -X DELETE", wf)
 
         package = wf[wf.index("- name: Package tools and checksums") : wf.index("- uses: actions/upload-artifact@v4")]
         self.assertIn("$safeTools = @(", package)
