@@ -4,9 +4,11 @@ NovaBlock est un bloqueur Windows de contenu adulte et de distractions, avec plu
 
 ## Version actuelle
 
-**v1.0.34**
+**v1.0.35**
 
-La v1.0.34 part du cœur v1.0.33, ajoute la couche de récupération v5 validée en conditions réelles et corrige le démarrage interactif ainsi que la sélection du DNS familial.
+La v1.0.35 conserve la récupération v5 et le démarrage interactif corrigé de la v1.0.34. Elle remet les outils de secours en cohérence avec cette récupération et vérifie l'ensemble des 78 règles DoH pendant la mise à jour et la surveillance normale.
+
+À la première installation, les 17 sites personnels actuellement configurés sur la machine de référence sont déjà présents dans la liste popup. Reddit n'est pas ajouté à cette liste ; son filtre NSFW distinct reste actif. Une installation existante conserve sa liste enregistrée.
 
 La publication exige la réussite des tests Windows et la vérification d'un redémarrage complet. Le workflow GitHub construit les artefacts, puis publie uniquement après un déclenchement manuel explicite depuis `main`.
 
@@ -43,10 +45,10 @@ La release GitHub contient :
 | Fichier | Rôle |
 | --- | --- |
 | [`NovaBlock.exe`](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe) | application principale Windows |
-| [`update.exe`](https://github.com/novaiax/novablock-X/releases/latest/download/update.exe) | installe ou répare la couche de récupération v1.0.34 |
+| [`update.exe`](https://github.com/novaiax/novablock-X/releases/latest/download/update.exe) | installe ou répare la couche de récupération v1.0.35 |
 | [`update.bat`](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat) | mise à jour complète depuis la dernière release |
-| [`NovaBlock-Outils.zip`](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip) | mise à jour, réactivation et diagnostic |
-| [`SHA256SUMS.txt`](https://github.com/novaiax/novablock-X/releases/latest/download/SHA256SUMS.txt) | empreintes SHA-256 des exécutables publiés |
+| [`NovaBlock-Outils.zip`](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock-Outils.zip) | outils de secours, mise à jour, réactivation et diagnostic |
+| [`SHA256SUMS.txt`](https://github.com/novaiax/novablock-X/releases/latest/download/SHA256SUMS.txt) | empreintes SHA-256 des fichiers publiés |
 
 Les binaires de release sont reconstruits par GitHub Actions à partir des sources du dépôt. Les empreintes officielles sont donc celles de `SHA256SUMS.txt` dans chaque release.
 
@@ -56,10 +58,10 @@ Les binaires de release sont reconstruits par GitHub Actions à partir des sourc
 2. L'exécuter en administrateur.
 3. Le script télécharge et vérifie `NovaBlock.exe` et `update.exe`.
 4. Il remplace l'application principale en conservant la configuration dans `%ProgramData%\NovaBlock`.
-5. Il installe ou répare la couche de récupération v1.0.34.
+5. Il vérifie les 78 règles DoH, retire uniquement les doublons anciens après sauvegarde, puis installe ou répare la couche de récupération v1.0.35.
 6. Il relance NovaBlock et vérifie le heartbeat de l'application ainsi que celui du mécanisme de récupération.
 
-Un update interrompu est conçu pour échouer proprement et réarmer l'installation précédente plutôt que de laisser une mise à jour partielle. Le script n'arrête plus NovaBlock de force et ne modifie plus les ACL du fichier `hosts` : il demande un arrêt volontaire, attend de façon bornée, conserve une copie du cœur précédent et restaure cette copie si le swap n'aboutit pas.
+Un update interrompu est conçu pour échouer proprement et réarmer l'installation précédente plutôt que de laisser une mise à jour partielle. Le script n'arrête plus NovaBlock de force et ne modifie plus les ACL du fichier `hosts` : il demande un arrêt volontaire, attend de façon bornée, conserve une copie du cœur précédent et restaure cette copie si le swap n'aboutit pas. Une installation avec 78 règles valides ne subit aucun changement de pare-feu. Le nettoyage de règles anciennes demande un redémarrage Windows pour recharger la politique.
 
 Le relais UAC conserve les chemins contenant des espaces. Le mode local écrit deux entrées SHA-256 distinctes, journalise son résultat final et laisse jusqu'à 20 secondes au watchdog pour appliquer le DNS familial avant de conclure à un échec. `update.exe` sait également reprendre une installation partielle dont le composant de récupération a déjà été créé puis verrouillé ; cette réparation reste strictement limitée au composant concerné et nettoie sa tâche ponctuelle.
 
@@ -99,7 +101,11 @@ Cette séparation évite de reproduire le problème des anciennes expérimentati
 
 `NovaBlock-Outils.zip` contient :
 
+- `EMERGENCY_RESET.bat/.ps1` : outil de dernier recours avec UAC, plage horaire 19 h–6 h, défi manuel de 200 caractères et journal ;
 - `REACTIVATE.bat/.ps1` : vérifie et rétablit les protections et le mécanisme de récupération ;
+- `REPARE_INTERNET.ps1` : diagnostique le réseau et vérifie les 78 règles DoH sans supprimer leur jeu complet ;
+- `unstick_sockets.bat/.ps1` : répare une pile réseau ou des navigateurs bloqués ;
+- `whitelist_site.bat/.ps1` : traite un site légitime bloqué par erreur ;
 - `MESURE_BOOT.ps1` : mesure le délai de disponibilité réseau après démarrage ;
 - `update.bat`, `elevate_update.ps1` et `update.exe` : mise à jour et réparation ;
 - `LISEZ-MOI.txt` : instructions correspondant aux fichiers de l'archive.
@@ -133,7 +139,7 @@ Pour la couche de récupération :
 
 ```bat
 cd recovery_v134
-go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd\recovery\rsrc --manifest cli --admin --product-version 1.0.34.0 --file-version 1.0.34.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
+go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd\recovery\rsrc --manifest cli --admin --product-version 1.0.35.0 --file-version 1.0.35.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
 gofmt -w cmd\recovery\main_windows.go
 go vet ./...
 go build -trimpath -ldflags="-s -w" -o ..\dist-release\update.exe .\cmd\recovery

@@ -1,19 +1,13 @@
 @echo off
 REM ============================================================
-REM NovaBlock - Master Repair Tool (wrapper)
+REM NovaBlock v1.0.35 - reparation des sockets (lanceur)
 REM ============================================================
-REM This .bat exists only to self-elevate and call the powerful
-REM PowerShell repair script (unstick_sockets.ps1) next to it.
-REM ALL the actual logic lives in the .ps1 — edit there, not here.
-REM
-REM What it does: fixes every known failure mode of NovaBlock and
-REM the browsers in one go — duplicate firewall rules, stuck DNS,
-REM legacy YouTube Restricted entries, obsolete browser policies,
-REM Chrome cache, Winsock corruption, dead scheduled tasks, etc.
+REM Demande l'UAC puis lance la reparation visible, avec journal conserve.
+REM Le script re-applique les protections et verifie DNS, DoH et HTTPS.
 REM
 REM Usage:
 REM   - Double-click            -> auto-elevates via UAC
-REM   - Right-click > Run as admin  -> skips the elevation prompt
+REM   - Right-click > Run as admin  -> utilise une session deja elevee
 REM ============================================================
 
 setlocal

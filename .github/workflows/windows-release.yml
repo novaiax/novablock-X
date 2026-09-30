@@ -2,7 +2,7 @@ name: Windows executable release
 
 on:
   push:
-    branches: [main, release/v1.0.34-publication, release/v1.0.34-v5, fix/startup-ui-recovery, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
+    branches: [main, release/v1.0.35-recovery-tools, release/v1.0.34-publication, release/v1.0.34-v5, fix/startup-ui-recovery, fix/task-manager-recovery, fix/custom-popup-instant, fix/custom-popup-url-read, fix/navigation-popup-and-movix, fix/close-one-tab-on-dismiss]
     paths:
       - .github/workflows/windows-release.yml
       - novablock/**
@@ -63,10 +63,35 @@ jobs:
           python -m compileall -q novablock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Parse PowerShell recovery tools
+        run: |
+          foreach ($name in @(
+            'EMERGENCY_RESET.ps1', 'REACTIVATE.ps1', 'REPARE_INTERNET.ps1',
+            'unstick_sockets.ps1', 'whitelist_site.ps1', 'MESURE_BOOT.ps1',
+            'elevate_update.ps1'
+          )) {
+            $path = Join-Path outils $name
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path, [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count) { throw "PowerShell parse failed: $name" }
+          }
+          $resetSource = Get-Content outils/EMERGENCY_RESET.ps1 -Raw
+          $embedded = [regex]::Match($resetSource, "(?s)`$CORE_SCRIPT = @'\r?\n(.*?)\r?\n'@")
+          if (-not $embedded.Success) { throw 'Embedded emergency script missing' }
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput(
+            $embedded.Groups[1].Value, [ref]$tokens, [ref]$errors
+          ) | Out-Null
+          if ($errors.Count) { throw 'Embedded emergency script parse failed' }
+
       - name: Validate recovery layer source
         working-directory: recovery_v134
         run: |
-          go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd/recovery/rsrc --manifest cli --admin --product-version 1.0.34.0 --file-version 1.0.34.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
+          go run github.com/tc-hib/go-winres@v0.3.3 simply --arch amd64 --out cmd/recovery/rsrc --manifest cli --admin --product-version 1.0.35.0 --file-version 1.0.35.0 --file-description "NovaBlock recovery installer" --product-name "NovaBlock"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $files = gofmt -l .
           if ($files) { Write-Host $files; throw 'gofmt required' }
@@ -95,7 +120,7 @@ jobs:
           if (-not $result.ok) { throw 'Packaged runtime self-test failed' }
           Copy-Item $report dist-release/runtime-selftest.json
 
-      - name: Compile v1.0.34 recovery executable
+      - name: Compile v1.0.35 recovery executable
         working-directory: recovery_v134
         run: |
           go build -trimpath -ldflags='-s -w' -o ../dist-release/update.exe ./cmd/recovery
@@ -112,9 +137,16 @@ jobs:
           New-Item -ItemType Directory -Force -Path $toolStage | Out-Null
           $safeTools = @(
             'LISEZ-MOI.txt',
+            'EMERGENCY_RESET.bat',
+            'EMERGENCY_RESET.ps1',
             'REACTIVATE.bat',
             'REACTIVATE.ps1',
+            'REPARE_INTERNET.ps1',
             'MESURE_BOOT.ps1',
+            'unstick_sockets.bat',
+            'unstick_sockets.ps1',
+            'whitelist_site.bat',
+            'whitelist_site.ps1',
             'elevate_update.ps1',
             'update.bat'
           )
@@ -124,7 +156,7 @@ jobs:
           Copy-Item dist-release/update.exe (Join-Path $toolStage 'update.exe') -Force
           Compress-Archive -Path (Join-Path $toolStage '*') -DestinationPath dist-release/NovaBlock-Outils.zip
 
-          $files = @('NovaBlock.exe','update.exe')
+          $files = @('NovaBlock.exe','update.exe','update.bat','NovaBlock-Outils.zip')
           $lines = foreach ($f in $files) {
             $hash = (Get-FileHash (Join-Path 'dist-release' $f) -Algorithm SHA256).Hash.ToLower()
             "$hash  $f"

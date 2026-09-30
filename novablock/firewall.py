@@ -27,6 +27,10 @@ of `netsh advfirewall firewall add rule`. Two reasons:
      accumulation bug when delete failed silently.
 """
 import logging
+import subprocess
+from datetime import datetime, timezone
+
+from .paths import PROGRAM_DATA
 
 log = logging.getLogger("novablock.firewall")
 
@@ -54,6 +58,10 @@ DOH_IPS = [
 ]
 
 RULE_PREFIX = "NovaBlock_DoH_"
+FIREWALL_RULES_KEY = (
+    r"SYSTEM\CurrentControlSet\Services\SharedAccess\Parameters"
+    r"\FirewallPolicy\FirewallRules"
+)
 
 # Windows Firewall COM constants (from netfw.h)
 NET_FW_RULE_DIR_OUT       = 2
@@ -125,17 +133,166 @@ def _snapshot_existing_names(fw) -> set[str]:
     return _snapshot_existing(fw)[0]
 
 
-def _rule_exists(fw, name: str) -> bool:
-    """Authoritative O(1) existence check for a single rule name.
+def _rule_matches(rule, protocol: int, port: str, remote_ip: str) -> bool:
+    address = str(rule.RemoteAddresses).lower()
+    expected = remote_ip.lower()
+    equivalents = {expected, f"{expected}-{expected}"}
+    if ":" not in remote_ip:
+        equivalents.add(f"{expected}/255.255.255.255")
+    return bool(
+        rule.Enabled and rule.Action == NET_FW_ACTION_BLOCK
+        and rule.Direction == NET_FW_RULE_DIR_OUT
+        and rule.Protocol == protocol and str(rule.RemotePorts) == port
+        and address in equivalents
+    )
+
+
+def _rule_exists(fw, name: str, protocol: int, port: str, remote_ip: str) -> bool:
+    """Look up and repair one named rule without enumerating the full policy.
 
     Rules.Item() is an indexed lookup: it either finds the rule or raises.
     Unlike a full enumeration it cannot come back partial, which matters
     because a partial snapshot is what let duplicates run away (see the
     comment in block_doh_endpoints)."""
     try:
-        return fw.Rules.Item(name) is not None
-    except Exception:
+        rule = fw.Rules.Item(name)
+        if rule is None:
+            return False
+        if not _rule_matches(rule, protocol, port, remote_ip):
+            rule.Direction = NET_FW_RULE_DIR_OUT
+            rule.Action = NET_FW_ACTION_BLOCK
+            rule.Protocol = protocol
+            rule.RemoteAddresses = remote_ip
+            rule.RemotePorts = port
+            rule.Enabled = True
+            log.warning("Repaired inactive or incorrect DoH rule %s", name)
+        return _rule_matches(rule, protocol, port, remote_ip)
+    except Exception as exc:
+        log.debug("DoH rule %s missing or could not be repaired: %s", name, exc)
         return False
+
+
+def _registry_rule_fields(raw: str) -> dict[str, str]:
+    return dict(part.split("=", 1) for part in raw.split("|") if "=" in part)
+
+
+def _valid_registry_rule(fields: dict[str, str], spec: tuple[int, str, str]) -> bool:
+    protocol, port, address = spec
+    address_field = "RA6" if ":" in address else "RA4"
+    actual_address = fields.get(address_field, "").lower()
+    expected_address = address.lower()
+    equivalent_addresses = {expected_address, f"{expected_address}-{expected_address}"}
+    if address_field == "RA4":
+        equivalent_addresses.add(f"{expected_address}/255.255.255.255")
+    return (
+        fields.get("Action") == "Block"
+        and fields.get("Active") == "TRUE"
+        and fields.get("Dir") == "Out"
+        and fields.get("Protocol") == str(protocol)
+        and fields.get("RPort") == port
+        and actual_address in equivalent_addresses
+    )
+
+
+def _plan_registry_cleanup(records: list[tuple[str, str]]) -> tuple[list[str], list[str], int]:
+    """Keep one active block for each current DoH endpoint and protocol.
+
+    The planner is pure so duplicate and missing-rule cases can be tested
+    without touching the live Windows Firewall policy.
+    """
+    specs = {name: (protocol, port, address)
+             for name, protocol, port, address in _rule_specs()}
+    groups: dict[str, list[tuple[str, dict[str, str]]]] = {}
+    total = 0
+    for value_name, raw in records:
+        fields = _registry_rule_fields(raw)
+        name = fields.get("Name", "")
+        if name.startswith(RULE_PREFIX):
+            groups.setdefault(name, []).append((value_name, fields))
+            total += 1
+
+    keep: set[str] = set()
+    missing: list[str] = []
+    for name, spec in specs.items():
+        valid = [value_name for value_name, fields in groups.get(name, [])
+                 if _valid_registry_rule(fields, spec)]
+        if valid:
+            keep.add(valid[0])
+        else:
+            missing.append(name)
+
+    if missing:
+        return [], missing, total
+    remove = [value_name for entries in groups.values()
+              for value_name, _fields in entries if value_name not in keep]
+    return remove, [], total
+
+
+def _read_registry_rules() -> list[tuple[str, str]]:
+    import winreg
+
+    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, FIREWALL_RULES_KEY) as key:
+        count = winreg.QueryInfoKey(key)[1]
+        records = []
+        for index in range(count):
+            value_name, value, _kind = winreg.EnumValue(key, index)
+            if isinstance(value, str) and RULE_PREFIX in value:
+                records.append((value_name, value))
+        return records
+
+
+def repair_duplicate_rules_registry() -> dict[str, object]:
+    """Prune legacy duplicate DoH rules while retaining all 78 valid blocks.
+
+    The normal 78-rule state is read only. A required-rule gap aborts before
+    any deletion. A full registry backup is mandatory before pruning.
+    """
+    import winreg
+
+    records = _read_registry_rules()
+    remove, missing, before = _plan_registry_cleanup(records)
+    expected = len(list(_rule_specs()))
+    report: dict[str, object] = {
+        "ok": not missing, "before": before, "after": before,
+        "expected": expected, "removed": 0, "missing": missing,
+        "reboot_required": False, "backup": "",
+    }
+    if missing:
+        log.error("Firewall cleanup refused: %d required rules are absent or invalid", len(missing))
+        return report
+    if not remove:
+        log.info("Firewall cleanup: %d valid rules, no changes needed", before)
+        return report
+
+    PROGRAM_DATA.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    backup = PROGRAM_DATA / f"firewall-rules-before-dedup-{stamp}.reg"
+    try:
+        subprocess.run(
+            ["reg.exe", "export", rf"HKLM\{FIREWALL_RULES_KEY}", str(backup), "/y"],
+            capture_output=True, text=True, timeout=180, check=True,
+        )
+        if not backup.is_file() or backup.stat().st_size == 0:
+            raise RuntimeError("firewall registry backup is empty")
+        report["backup"] = str(backup)
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, FIREWALL_RULES_KEY,
+                            0, winreg.KEY_SET_VALUE) as key:
+            for value_name in remove:
+                winreg.DeleteValue(key, value_name)
+        final_records = _read_registry_rules()
+        remaining, final_missing, after = _plan_registry_cleanup(final_records)
+        report.update(
+            ok=not remaining and not final_missing and after == expected,
+            after=after, removed=before - after, missing=final_missing,
+            reboot_required=before != after,
+        )
+        log.warning("Firewall duplicate cleanup: %d -> %d rules; backup=%s; reboot=%s",
+                    before, after, backup, report["reboot_required"])
+    except Exception as exc:
+        report["ok"] = False
+        report["error"] = str(exc)
+        log.exception("Firewall duplicate cleanup failed; backup=%s", backup)
+    return report
 
 
 def block_doh_endpoints() -> int:
@@ -145,23 +302,8 @@ def block_doh_endpoints() -> int:
     if fw is None:
         return 0
 
-    existing, total_rules = _snapshot_existing(fw)
-
-    # If we previously accumulated duplicates (the old netsh add-without-dedup
-    # bug could leave thousands), drop everything matching the prefix first
-    # so we end up with exactly len(specs) rules. The threshold catches the
-    # pathological case (10k+ rules) but skips the cheap path when count is
-    # already normal.
-    expected_count = 26 * 3  # 26 IPs × {TCP443, TCP853, UDP443} = 78
-    if total_rules > expected_count * 2:
-        log.warning("Found %d NovaBlock_DoH rule objects under %d distinct names "
-                    "(expected %d) — wiping duplicates",
-                    total_rules, len(existing), expected_count)
-        removed = _wipe_all_doh_rules(fw)
-        log.info("Removed %d duplicate rules", removed)
-        existing = set()
-
     added = 0
+    existing = 0
     try:
         import win32com.client
     except ImportError:
@@ -175,7 +317,8 @@ def block_doh_endpoints() -> int:
         # duplicates make the scan slower and more likely to come back short,
         # which adds more duplicates. Item() is an indexed lookup that cannot
         # go partial, so it is the authority here.
-        if name in existing or _rule_exists(fw, name):
+        if _rule_exists(fw, name, protocol, port, remote_ip):
+            existing += 1
             continue
         try:
             rule = win32com.client.Dispatch("HNetCfg.FWRule")
@@ -195,14 +338,12 @@ def block_doh_endpoints() -> int:
 
     if added or existing:
         log.info("DoH firewall: %d added, %d already present (target: %d)",
-                 added, len(existing), expected_count)
+                 added, existing, len(list(_rule_specs())))
     return added
 
 
 def _wipe_all_doh_rules(fw) -> int:
-    """Remove every rule whose name starts with RULE_PREFIX. Used to clean up
-    accumulated duplicates from old netsh-based versions, and by
-    unblock_doh_endpoints below."""
+    """Remove every rule whose name starts with RULE_PREFIX during uninstall."""
     names, _total = _snapshot_existing(fw)
     removed = 0
     for n in names:
@@ -230,14 +371,15 @@ def unblock_doh_endpoints() -> int:
 
 
 def doh_blocked() -> bool:
-    """Check if at least one NovaBlock DoH rule is active. Uses COM Item()
-    for O(1) lookup instead of scanning the whole rule list."""
+    """Require all current DoH rules, using indexed lookups on every tick."""
     fw = _get_fw_policy()
     if fw is None:
         return False
-    canary = _make_rule_name("TCP443", "1.1.1.1")
-    try:
-        rule = fw.Rules.Item(canary)
-        return bool(rule and rule.Enabled)
-    except Exception:
-        return False
+    for name, protocol, port, address in _rule_specs():
+        try:
+            rule = fw.Rules.Item(name)
+            if not rule or not _rule_matches(rule, protocol, port, address):
+                return False
+        except Exception:
+            return False
+    return True

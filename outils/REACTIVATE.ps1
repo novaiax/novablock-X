@@ -1,8 +1,8 @@
 # ============================================================
-# NovaBlock - REACTIVATE v1.0.34
+# NovaBlock - REACTIVATE v1.0.35
 # ============================================================
 # Remet en route NovaBlock et verifie egalement la couche
-# de recuperation v1.0.34.
+# de recuperation v1.0.35.
 # ============================================================
 
 $ErrorActionPreference = 'Continue'
@@ -101,7 +101,7 @@ for ($w = 0; $w -lt 36; $w += 2) {
 }
 if (-not $frais) { Souci "heartbeat principal non confirme" }
 
-Write-Host "[5] Reparation de la recuperation v1.0.34..." -ForegroundColor Cyan
+Write-Host "[5] Reparation de la recuperation v1.0.35..." -ForegroundColor Cyan
 $recoveryTool = $null
 $localTool = Join-Path $PSScriptRoot 'update.exe'
 $installedTool = Join-Path $nb 'runtime_7c31.exe'
@@ -116,7 +116,7 @@ if ($recoveryTool) {
         else { Souci "controle de sante de la recuperation echoue" }
     } else { Souci "reparation de la recuperation echouee" }
 } else {
-    Souci "outil v1.0.34 absent; relance update.bat depuis la derniere release"
+    Souci "outil v1.0.35 absent; relance update.bat depuis la derniere release"
 }
 
 Write-Host "[6] Verification reseau et protections..." -ForegroundColor Cyan
@@ -137,11 +137,18 @@ try {
 } catch { Souci "connexion HTTPS indisponible : $($_.Exception.Message)" }
 
 try {
-    $fw = New-Object -ComObject HNetCfg.FwPolicy2
-    $n = $fw.Rules.Count
-    if ($n -gt 5000) { Souci "$n regles pare-feu; lance REPARE_INTERNET.ps1" }
-    else { OK "volume de regles pare-feu coherent" }
-} catch { Info "comptage des regles indisponible" }
+    $process = Start-Process -FilePath $exePath -ArgumentList '--repair-firewall' `
+        -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+    $reportPath = Join-Path $nb 'firewall-repair-report.json'
+    if ($process.ExitCode -ne 0 -or -not (Test-Path $reportPath)) {
+        Souci 'verification des 78 regles DoH non confirmee'
+    } else {
+        $report = Get-Content -LiteralPath $reportPath -Raw | ConvertFrom-Json
+        OK ("regles DoH : {0} -> {1}; doublons retires : {2}" -f `
+            $report.before, $report.after, $report.removed)
+        if ($report.reboot_required) { Info 'redemarre Windows pour recharger le pare-feu' }
+    }
+} catch { Souci "controle des regles DoH impossible : $($_.Exception.Message)" }
 
 Write-Host ""
 Write-Host "============================================================" -ForegroundColor Green

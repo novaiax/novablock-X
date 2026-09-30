@@ -3,8 +3,8 @@ REM ============================================================
 REM NovaBlock - EMERGENCY RESET (lanceur)
 REM ============================================================
 REM Ouvre l'interface securisee. Le reset ne demarre QUE apres avoir
-REM retape a la main un code aleatoire de 30 caracteres, copier-coller
-REM desactive. La logique du reset est embarquee dans le .ps1, inchangee.
+REM retape a la main un code aleatoire de 200 caracteres, copier-coller
+REM desactive. La logique du reset reste embarquee dans le .ps1.
 REM
 REM Usage : double-clic (il s'eleve tout seul)
 REM ============================================================

@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 REM ============================================================
 REM NovaBlock - update complet depuis la derniere release GitHub
-REM v1.0.34 : coeur + couche de recuperation + verification SHA256
+REM v1.0.35 : coeur + recuperation + verification SHA256 + dedup DoH
 REM ============================================================
 
 net session >nul 2>&1
@@ -27,10 +27,12 @@ set "LOCK_FILE=%LOCK_DIR%\update.lock"
 set "SENTINEL=%LOCK_DIR%\shutdown.sentinel"
 set "STALE_AFTER=1800"
 set "BASE_URL=https://github.com/novaiax/novablock-X/releases/latest/download"
-set "RECOVERY_TMP=%TEMP%\NovaBlock-update-v134.exe"
+set "RECOVERY_TMP=%TEMP%\NovaBlock-update-v135.exe"
 set "SUMS_TMP=%TEMP%\NovaBlock-SHA256SUMS.txt"
 set "LOCAL_MODE=0"
 set "CORE_SWAPPED=0"
+set "FIREWALL_REPAIR_ERROR=0"
+set "FIREWALL_REBOOT=0"
 
 if not exist "%LOCK_DIR%" mkdir "%LOCK_DIR%" >nul 2>&1
 >> "%LOCK_DIR%\update-launch.log" echo [%date% %time%] start mode=%~1 app=%~2 recovery=%~3
@@ -155,14 +157,26 @@ goto :cleanup_fail
 set "CORE_SWAPPED=1"
 echo   [OK] Coeur installe.
 
-REM ----- 6. Installer/reparer la couche v1.0.34 -----
-echo [6/8] Installation/reparation de la recuperation v1.0.34...
+REM ----- 5b. Verifier puis dedoublonner les regles DoH si necessaire -----
+echo [5b/8] Verification des regles pare-feu DoH...
+start "" /wait "%INSTALL_PATH%" --repair-firewall
+if errorlevel 1 (
+    echo   [PROBLEME] Nettoyage DoH non confirme; les regles existantes sont conservees.
+    set "FIREWALL_REPAIR_ERROR=1"
+) else (
+    powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $r=Get-Content -LiteralPath '%LOCK_DIR%\firewall-repair-report.json' -Raw | ConvertFrom-Json; Write-Host ('  [OK] Regles DoH avant={0} apres={1}; doublons retires={2}' -f $r.before,$r.after,$r.removed)"
+    if errorlevel 1 set "FIREWALL_REPAIR_ERROR=1"
+    for /f %%r in ('powershell -NoProfile -Command "$r=Get-Content -LiteralPath '%LOCK_DIR%\firewall-repair-report.json' -Raw | ConvertFrom-Json; if($r.reboot_required){1}else{0}"') do set "FIREWALL_REBOOT=%%r"
+)
+
+REM ----- 6. Installer/reparer la couche v1.0.35 -----
+echo [6/8] Installation/reparation de la recuperation v1.0.35...
 "%RECOVERY_TMP%" --repair
 if errorlevel 1 (
     echo   [ERROR] La couche de recuperation n'a pas passe son controle de sante.
     goto :cleanup_fail
 )
-echo   [OK] Recuperation v1.0.34 active.
+echo   [OK] Recuperation v1.0.35 active.
 
 REM ----- 7. Relancer le coeur dans la session interactive -----
 echo [7/8] Relance interactive de NovaBlock...
@@ -200,6 +214,7 @@ if errorlevel 1 (
 REM ----- 8. Sante finale : filtre familial + Internet utile -----
 echo [8/8] Controle final...
 set /a HEALTH=0
+set /a HEALTH+=FIREWALL_REPAIR_ERROR
 set /a DNS_WAITED=0
 :wait_family_dns
 for /f %%d in ('powershell -NoProfile -Command "$v4=@('1.1.1.3','1.0.0.3','185.228.168.168','185.228.169.168','208.67.222.123','208.67.220.123'); $v6=@('2606:4700:4700::1113','2606:4700:4700::1003','2a0d:2a00:1::','2a0d:2a00:2::'); $s=(Get-DnsClientServerAddress -ErrorAction SilentlyContinue).ServerAddresses; $h4=$false; $h6=$false; foreach($a in $s){if($v4 -contains $a){$h4=$true}; if($v6 -contains $a){$h6=$true}}; if($h4 -and $h6){0}else{1}"') do set DNS_FAMILY_ERROR=%%d
@@ -235,9 +250,9 @@ if not "!HTTPS_ERROR!"=="0" (
 
 "%RECOVERY_TMP%" --status >nul 2>&1
 if errorlevel 1 (
-    echo   [PROBLEME] Recuperation v1.0.34 non saine.
+    echo   [PROBLEME] Recuperation v1.0.35 non saine.
     set /a HEALTH+=1
-) else echo   [OK] Recuperation v1.0.34 saine
+) else echo   [OK] Recuperation v1.0.35 saine
 
 tasklist /FI "IMAGENAME eq NovaBlock.exe" /NH 2>nul | find /I "NovaBlock.exe" >nul
 if errorlevel 1 (
@@ -256,6 +271,7 @@ if !HEALTH! equ 0 (
     >> "%LOCK_DIR%\update-launch.log" echo [%date% %time%] complete health=!HEALTH!
 )
 echo Configuration conservee dans %PROGRAMDATA%\NovaBlock.
+if "%FIREWALL_REBOOT%"=="1" echo Un redemarrage Windows est necessaire pour recharger le pare-feu nettoye.
 echo ============================================================
 timeout /t 3 /nobreak >nul
 exit /b !HEALTH!

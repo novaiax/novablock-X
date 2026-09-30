@@ -9,6 +9,7 @@ Modes:
 """
 import argparse
 import ctypes
+import json
 import logging
 import os
 import sys
@@ -347,6 +348,7 @@ def main() -> int:
     parser.add_argument("--uninstall", action="store_true", help="Finalize uninstall")
     parser.add_argument("--check", action="store_true", help="Run diagnostic")
     parser.add_argument("--reapply", action="store_true", help="Force re-apply blocking")
+    parser.add_argument("--repair-firewall", action="store_true", help="Restore the required DoH rule set")
     parser.add_argument("--self-test", metavar="REPORT", help="Packaged runtime check; no installation")
     args, _ = parser.parse_known_args()
     if args.self_test:
@@ -390,6 +392,17 @@ def main() -> int:
                 "NovaBlock", 0x40,
             )
         return 0
+    if args.repair_firewall:
+        from . import firewall
+        report_path = PROGRAM_DATA / "firewall-repair-report.json"
+        try:
+            firewall.block_doh_endpoints()
+            report = firewall.repair_duplicate_rules_registry()
+        except Exception as exc:
+            log.exception("Firewall repair failed")
+            report = {"ok": False, "error": str(exc)}
+        report_path.write_text(json.dumps(report, ensure_ascii=False), encoding="utf-8")
+        return 0 if report.get("ok") else 1
     if recovery.shutdown_requested():
         log.info("Maintenance shutdown requested — normal launch deferred")
         return 0

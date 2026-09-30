@@ -1,4 +1,5 @@
 import unittest
+import json
 from unittest.mock import patch
 
 from novablock import config
@@ -6,6 +7,39 @@ from novablock.custom_status import StatusWindow
 
 
 class CustomPopupConfigTests(unittest.TestCase):
+    def test_fresh_install_starts_with_requested_popup_sites_without_reddit(self):
+        expected = {
+            "botinok.porn", "domporno.me", "seksvideo.tv", "top-xxx.pro",
+            "sexm.xxx", "nudevista.tv", "pornoopa.com", "ru.mylust.com",
+            "ru.anysex.com", "myhomemadesex.com", "pornorussia.mobi",
+            "vk.ru", "hqfukc.com", "xxxfilm.pro", "porn4e.com",
+            "duckduckgo.com", "ucweb.com",
+        }
+        class MissingConfig:
+            def exists(self):
+                return False
+
+        with patch.object(config, "CONFIG_FILE", MissingConfig()):
+            fresh = config.load()
+            self.assertEqual(set(fresh["custom_popup_domains"]), expected)
+            self.assertEqual(len(fresh["custom_popup_domains"]), 17)
+            self.assertNotIn("reddit.com", fresh["custom_popup_domains"])
+            fresh["custom_popup_domains"].append("example.com")
+            self.assertEqual(set(config.load()["custom_popup_domains"]), expected)
+
+    def test_existing_install_does_not_gain_new_defaults(self):
+        class ExistingConfig:
+            def exists(self):
+                return True
+
+            def read_bytes(self):
+                return b"encrypted"
+
+        stored = {"custom_popup_domains": [], "code_hash": "existing", "install_ts": 1}
+        with patch.object(config, "CONFIG_FILE", ExistingConfig()), \
+             patch.object(config, "decrypt_machine", return_value=json.dumps(stored).encode()):
+            self.assertEqual(config.load()["custom_popup_domains"], [])
+
     def test_movix_cash_cannot_be_added(self):
         self.assertEqual(config.add_custom_domain("movix.cash"), "")
         self.assertEqual(config.add_custom_domain("www.movix.cash"), "")

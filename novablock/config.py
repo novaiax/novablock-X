@@ -12,6 +12,28 @@ from .paths import CONFIG_FILE, ensure_dirs
 # visiting the streaming site must not trigger a custom-site popup.
 CUSTOM_SITE_ALLOWLIST = {"movix.cash"}
 
+# Seeded only when no configuration exists yet. Existing installations keep
+# their own popup list; Reddit's separate NSFW filter remains independent.
+DEFAULT_POPUP_DOMAINS = (
+    "botinok.porn",
+    "domporno.me",
+    "seksvideo.tv",
+    "top-xxx.pro",
+    "sexm.xxx",
+    "nudevista.tv",
+    "pornoopa.com",
+    "ru.mylust.com",
+    "ru.anysex.com",
+    "myhomemadesex.com",
+    "pornorussia.mobi",
+    "vk.ru",
+    "hqfukc.com",
+    "xxxfilm.pro",
+    "porn4e.com",
+    "duckduckgo.com",
+    "ucweb.com",
+)
+
 DEFAULTS: dict[str, Any] = {
     "version": 1,
     "friend_email": "",
@@ -241,7 +263,9 @@ def uninstall_cooldown_remaining() -> int:
 
 def load() -> dict[str, Any]:
     if not CONFIG_FILE.exists():
-        return DEFAULTS.copy()
+        fresh = DEFAULTS.copy()
+        fresh["custom_popup_domains"] = list(DEFAULT_POPUP_DOMAINS)
+        return fresh
     try:
         blob = CONFIG_FILE.read_bytes()
         raw = decrypt_machine(blob)
