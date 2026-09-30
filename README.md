@@ -52,10 +52,17 @@ La release GitHub contient :
 
 Les binaires de release sont reconstruits par GitHub Actions à partir des sources du dépôt. Les empreintes officielles sont donc celles de `SHA256SUMS.txt` dans chaque release.
 
+## Installation neuve
+
+1. Lance `NovaBlock.exe` en administrateur et termine l'assistant. Il configure le blocage hosts, le DNS familial et les politiques navigateur, puis crée les **78 règles DoH de NovaBlock** et ses tâches de surveillance. Les autres règles du pare-feu Windows restent en place.
+2. Pour ajouter la récupération v5, extrais `NovaBlock-Outils.zip`, puis lance `update.bat` en administrateur depuis ce dossier. L'updater installe le composant séparé `update.exe` et contrôle son heartbeat. **`NovaBlock.exe` seul n'installe pas ce composant.**
+
+Sur une ancienne installation, lancer seulement `NovaBlock.exe` complète ou répare les règles requises, mais ne nettoie pas les milliers de doublons hérités. Ce nettoyage ciblé est effectué par `update.bat`.
+
 ## Mise à jour recommandée
 
-1. Télécharger `update.bat` depuis la dernière release.
-2. L'exécuter en administrateur.
+1. Télécharge `NovaBlock-Outils.zip` depuis la dernière release et extrais tous ses fichiers dans le même dossier.
+2. Lance `update.bat` en administrateur depuis ce dossier.
 3. Le script télécharge et vérifie `NovaBlock.exe` et `update.exe`.
 4. Il remplace l'application principale en conservant la configuration dans `%ProgramData%\NovaBlock`.
 5. Il vérifie les 78 règles DoH, retire uniquement les doublons anciens après sauvegarde, puis installe ou répare la couche de récupération v1.0.35.
