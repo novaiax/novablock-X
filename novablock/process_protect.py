@@ -11,15 +11,17 @@ PROCESS_TERMINATE = 0x0001
 PROCESS_SUSPEND_RESUME = 0x0800
 
 
-def harden_current_process() -> bool:
+def harden_current_process(process_id: int | None = None) -> bool:
     try:
         import win32api
         import win32security
     except ImportError:
         log.warning("pywin32 missing — skipping process hardening")
         return False
+    handle = None
     try:
-        handle = win32api.GetCurrentProcess()
+        handle = (win32api.GetCurrentProcess() if process_id is None else
+                  win32api.OpenProcess(0x00060000, False, process_id))
         sd = win32security.GetSecurityInfo(
             handle, win32security.SE_KERNEL_OBJECT,
             win32security.DACL_SECURITY_INFORMATION,
@@ -28,6 +30,13 @@ def harden_current_process() -> bool:
         if old_dacl is None:
             log.warning("Process has a null DACL; leaving it unchanged and relying on recovery")
             return False
+        if old_dacl.GetAceCount():
+            first = old_dacl.GetAce(0)
+            if (first[0][0] == win32security.ACCESS_DENIED_ACE_TYPE and
+                    win32security.ConvertSidToStringSid(first[2]) == "S-1-1-0" and
+                    (first[1] & (PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME)) ==
+                    PROCESS_TERMINATE | PROCESS_SUSPEND_RESUME):
+                return True
         everyone = win32security.ConvertStringSidToSid("S-1-1-0")
         revision = win32security.ACL_REVISION_DS
         dacl = win32security.ACL()
@@ -61,3 +70,14 @@ def harden_current_process() -> bool:
     except Exception as e:
         log.warning("could not harden process (will rely on scheduled recovery): %s", e)
         return False
+    finally:
+        if process_id is not None and handle is not None:
+            try:
+                handle.Close()
+            except Exception:
+                pass
+
+
+def harden_process_id(pid: int) -> bool:
+    """Apply the same protection to a just-started recovery child."""
+    return harden_current_process(pid)

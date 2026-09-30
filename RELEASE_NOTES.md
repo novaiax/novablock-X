@@ -4,7 +4,7 @@ La mise à jour se fait toujours avec un seul fichier à télécharger : `update
 
 ## Relance et incident Defender
 
-- `NovaBlock.exe` embarque un petit relais local au nom de processus neutre. Il tourne dans la session utilisateur, vérifie l'identité du processus principal, ferme les fenêtres de navigateurs reconnues pendant son absence et demande aussitôt sa relance. Le lancement direct évite le délai d'appel à la tâche planifiée dans le cas courant.
+- `NovaBlock.exe` embarque un petit relais local au nom de processus neutre. Il tourne dans la session utilisateur, reçoit la même protection de processus que le cœur, vérifie l'identité du processus principal, ferme les fenêtres de navigateurs reconnues pendant son absence et demande aussitôt sa relance. Le lancement direct évite le délai d'appel à la tâche planifiée dans le cas courant.
 - Les métadonnées visibles du service de récupération portent aussi un intitulé neutre. L'updater vérifie toujours le service et son heartbeat.
 - Le PC de référence a subi une mise en quarantaine de l'ancien binaire du service par Microsoft Defender. Les nouveaux candidats ont passé une analyse ciblée locale, mais une analyse statique ne prouve pas que Defender ne réagira pas à leur comportement après installation. Aucune exclusion antivirus générale n'est installée par cette release.
 - Le journal distingue désormais l'absence du processus, son retour et l'apparition de l'icône. L'objectif de deux secondes pour l'icône doit être mesuré après installation sur l'appareil concerné.

@@ -187,6 +187,8 @@ def spawn_companion() -> int:
             return pid
     _pending_companion_pid = _spawn([str(helper_path()), "--supervise"])
     if _pending_companion_pid:
+        if not process_protect.harden_process_id(_pending_companion_pid):
+            log.warning("Interactive relay process hardening did not apply")
         log.info("Companion spawned, launcher pid=%d", _pending_companion_pid)
     return _pending_companion_pid
 

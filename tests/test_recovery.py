@@ -217,11 +217,13 @@ class CompanionTests(IsolatedTest):
         self.mock(companion, "_read_pid", return_value=0)
         self.mock(companion, "_pending_companion_pid", new=0)
         self.mock(companion, "_pid_alive", return_value=False)
+        hardened = self.mock(companion.process_protect, "harden_process_id", return_value=True)
         spawn = self.mock(companion, "_spawn", return_value=123)
         self.assertEqual(companion.spawn_companion(), 123)
         command = spawn.call_args.args[0]
         self.assertEqual(command, [str(companion.helper_path()), "--supervise"])
         self.assertNotIn("novablock", Path(command[0]).name.lower())
+        hardened.assert_called_once_with(123)
 
     def test_spawn_sets_independent_pyinstaller_environment(self):
         popen = self.mock(companion.subprocess, "Popen", return_value=SimpleNamespace(pid=123))
@@ -290,6 +292,47 @@ class Win32MutexTests(IsolatedTest):
 
 
 class ProcessProtectionTests(IsolatedTest):
+    def test_unrelated_existing_deny_does_not_skip_relay_hardening(self):
+        import win32api
+        import win32security
+
+        users = win32security.ConvertStringSidToSid("S-1-5-32-545")
+        everyone = win32security.ConvertStringSidToSid("S-1-1-0")
+        old = win32security.ACL()
+        old.AddAccessDeniedAce(win32security.ACL_REVISION, 0x0801, users)
+        old.AddAccessAllowedAce(win32security.ACL_REVISION, 0x1FFFFF, everyone)
+        descriptor = SimpleNamespace(GetSecurityDescriptorDacl=lambda: old)
+        self.mock(win32api, "GetCurrentProcess", return_value=123)
+        self.mock(win32security, "GetSecurityInfo", return_value=descriptor)
+        setter = self.mock(win32security, "SetSecurityInfo")
+        self.assertTrue(process_protect.harden_current_process())
+        new_acl = setter.call_args.args[5]
+        first = new_acl.GetAce(0)
+        self.assertEqual(win32security.ConvertSidToStringSid(first[2]), "S-1-1-0")
+        self.assertEqual(new_acl.GetAceCount(), 3)
+
+    def test_recovery_child_is_hardened_and_can_exit_itself(self):
+        import subprocess
+        import win32api
+        import win32security
+
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.2)"],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.assertTrue(process_protect.harden_process_id(child.pid))
+            handle = win32api.OpenProcess(0x00020000, False, child.pid)
+            try:
+                descriptor = win32security.GetSecurityInfo(
+                    handle, win32security.SE_KERNEL_OBJECT,
+                    win32security.DACL_SECURITY_INFORMATION,
+                )
+                first = descriptor.GetSecurityDescriptorDacl().GetAce(0)
+                self.assertEqual(first[0][0], win32security.ACCESS_DENIED_ACE_TYPE)
+            finally:
+                handle.Close()
+        finally:
+            self.assertEqual(child.wait(timeout=5), 0)
+
     def test_deny_is_first_and_original_allow_is_preserved(self):
         import win32api
         import win32security
