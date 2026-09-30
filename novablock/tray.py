@@ -54,7 +54,12 @@ class Tray:
     def start(self) -> None:
         if not self.icon:
             return
-        threading.Thread(target=self.icon.run, daemon=True, name="NovaBlockTray").start()
+        def visible(icon) -> None:
+            icon.visible = True
+            log.info("Tray icon visible")
+
+        threading.Thread(target=self.icon.run, args=(visible,), daemon=True,
+                         name="NovaBlockTray").start()
 
     def stop(self) -> None:
         if self.icon:

@@ -6,7 +6,9 @@ A privileged administrator can still terminate processes; this is recovery,
 not an assertion that a user-space executable is unkillable.
 """
 import logging
+import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -14,13 +16,65 @@ import time
 from pathlib import Path
 
 from . import process_protect, recovery
-from .paths import COMPANION_PID_FILE, MAIN_PID_FILE, ensure_dirs, exe_path
+from .paths import COMPANION_PID_FILE, MAIN_PID_FILE, PROGRAM_DATA, ensure_dirs, exe_path
 
 log = logging.getLogger("novablock.companion")
 POLL_INTERVAL = 1.0
 RELAUNCH_GRACE = 5.0
 COMPANION_FLAG = "--companion"
+HELPER_BUNDLE_NAME = "relay.exe"
 _pending_companion_pid = 0
+_next_helper_install = 0.0
+
+
+def helper_path() -> Path:
+    # The process name is neutral; the source bundle name is never launched.
+    suffix = hashlib.sha256(b"interactive-continuity-2026-09").hexdigest()[:8]
+    return PROGRAM_DATA / f"r_{suffix}.exe"
+
+
+def _bundled_helper_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys._MEIPASS) / HELPER_BUNDLE_NAME
+    return Path(__file__).resolve().parent.parent / "build" / HELPER_BUNDLE_NAME
+
+
+def _sha256(path: Path) -> bytes:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.digest()
+
+
+def _ensure_helper() -> bool:
+    """Install only the bundled, known binary; never trust a path from config."""
+    global _next_helper_install
+    source = _bundled_helper_path()
+    target = helper_path()
+    if not source.is_file():
+        log.error("Interactive relay is missing from this build")
+        return False
+    try:
+        expected = _sha256(source)
+        if target.is_file() and _sha256(target) == expected:
+            return True
+        if time.monotonic() < _next_helper_install:
+            return False
+        ensure_dirs()
+        temporary = target.with_suffix(".new")
+        try:
+            shutil.copyfile(source, temporary)
+            if _sha256(temporary) != expected:
+                raise OSError("Interactive relay copy hash mismatch")
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return _sha256(target) == expected
+    except OSError as exc:
+        _next_helper_install = time.monotonic() + 60
+        log.warning("Interactive relay unavailable; scheduled recovery remains active: %s", exc)
+        return False
 
 
 def _read_pid(p: Path) -> int:
@@ -44,17 +98,19 @@ def _pid_alive(pid: int, role: str = "") -> bool:
         if not proc.is_running():
             return False
         actual_exe = os.path.normcase(os.path.abspath(proc.exe()))
-        expected_exe = os.path.normcase(os.path.abspath(sys.executable))
+        expected_exe = os.path.normcase(os.path.abspath(
+            helper_path() if role == "companion" else sys.executable
+        ))
         if actual_exe != expected_exe:
             return False
         argv = proc.cmdline()
+        if role == "companion":
+            return "--supervise" in argv
         if not getattr(sys, "frozen", False):
             entry = str(Path(__file__).resolve().parent.parent / "__main__.py")
             if not any(os.path.normcase(os.path.abspath(a)) == os.path.normcase(entry)
                        for a in argv[1:] if not a.startswith("-")):
                 return False
-        if role == "companion":
-            return COMPANION_FLAG in argv
         if role == "main":
             return not any(flag in argv for flag in
                            (COMPANION_FLAG, "--watchdog", "--uninstall", "--check", "--reapply", "--self-test"))
@@ -63,7 +119,8 @@ def _pid_alive(pid: int, role: str = "") -> bool:
         log.error("psutil missing: cannot inspect companion process")
         return False
     except psutil.AccessDenied:
-        return psutil.pid_exists(pid)
+        # A PID without a verifiable image can be unrelated or recycled.
+        return False
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return False
     except Exception as e:
@@ -123,13 +180,15 @@ def spawn_companion() -> int:
     global _pending_companion_pid
     if recovery.recovery_paused():
         return 0
-    # Onefile extraction can take longer than RELAUNCH_GRACE. Track the
-    # bootloader PID until the actual Python child has written its own PID.
+    if not _ensure_helper():
+        return 0
     for pid in (_read_pid(COMPANION_PID_FILE), _pending_companion_pid):
         if _pid_alive(pid, "companion"):
             return pid
-    _pending_companion_pid = _spawn(_command(COMPANION_FLAG))
+    _pending_companion_pid = _spawn([str(helper_path()), "--supervise"])
     if _pending_companion_pid:
+        if not process_protect.harden_process_id(_pending_companion_pid):
+            log.warning("Interactive relay process hardening did not apply")
         log.info("Companion spawned, launcher pid=%d", _pending_companion_pid)
     return _pending_companion_pid
 

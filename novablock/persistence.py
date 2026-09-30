@@ -3,7 +3,8 @@ relaunches automatically and resists kills. Run as admin."""
 import logging
 import os
 import subprocess
-import sys
+import xml.etree.ElementTree as ET
+from xml.sax.saxutils import escape
 from pathlib import Path
 
 from .paths import LOGON_TASK_NAME, TASK_NAME, exe_path
@@ -22,18 +23,13 @@ def _run(cmd: list[str], timeout: int = 30) -> tuple[int, str, str]:
         return -1, "", str(e)
 
 
-def _exe() -> str:
-    p = exe_path()
-    return f'"{p}"'
-
-
 def install_scheduled_task() -> bool:
     """Creates a scheduled task that:
     - runs at boot under SYSTEM
     - relaunches every 1 minute if not running
     - has highest privileges
     """
-    cmd = _exe()
+    command = escape(str(exe_path()))
     xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -82,7 +78,7 @@ def install_scheduled_task() -> bool:
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{Path(exe_path()).as_posix().replace('/', '\\')}</Command>
+      <Command>{command}</Command>
       <Arguments>--watchdog</Arguments>
     </Exec>
   </Actions>
@@ -111,17 +107,65 @@ def remove_scheduled_task() -> bool:
 
 
 def task_exists() -> bool:
-    code, _, _ = _run(["schtasks", "/Query", "/TN", TASK_NAME])
-    return code == 0
+    return _scheduled_task_valid(TASK_NAME, "--watchdog", system=True)
+
+
+def _scheduled_task_valid(task_name: str, arguments: str, *, system: bool = False,
+                          user_sid: str | None = None) -> bool:
+    """Presence alone is insufficient: reject disabled or retargeted tasks."""
+    code, xml, _error = _run(["schtasks", "/Query", "/TN", task_name, "/XML"])
+    if code != 0:
+        return False
+    try:
+        root = ET.fromstring(xml)
+        ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+        get = lambda path: (root.findtext(path, default="", namespaces=ns) or "").strip()
+        command = get(".//t:Exec/t:Command").strip('"')
+        expected = str(exe_path())
+        if os.path.normcase(os.path.abspath(command)) != os.path.normcase(os.path.abspath(expected)):
+            return False
+        if get(".//t:Exec/t:Arguments") != arguments:
+            return False
+        # Task Scheduler omits Enabled when it uses the default True value.
+        if get("./t:Settings/t:Enabled").lower() == "false":
+            return False
+        if get(".//t:Principal/t:RunLevel") != "HighestAvailable":
+            return False
+        sid = get(".//t:Principal/t:UserId")
+        if system:
+            return sid.upper() == "S-1-5-18" and root.find(".//t:BootTrigger", ns) is not None
+        if get(".//t:Principal/t:LogonType") != "InteractiveToken":
+            return False
+        if user_sid and sid != user_sid:
+            return False
+        return root.find(".//t:LogonTrigger", ns) is not None
+    except (ValueError, ET.ParseError, OSError):
+        return False
+
+
+def _process_session_id() -> int:
+    import ctypes
+    session = ctypes.c_uint32()
+    if not ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session)):
+        raise RuntimeError("Cannot identify the interactive Windows session")
+    return int(session.value)
 
 
 def _current_user_sid() -> str:
-    """SID of the user installing NovaBlock — used so the logon task launches
-    the full app under that user's interactive session (with their highest
-    available privileges, no UAC prompt for admins)."""
-    import getpass
+    """Use the interactive session owner, not a different UAC admin account."""
     import win32security  # type: ignore
-    sid_obj, _domain, _type = win32security.LookupAccountName(None, getpass.getuser())
+    import win32ts  # type: ignore
+
+    session = _process_session_id()
+    if session == 0:
+        raise RuntimeError("Cannot register an interactive task from session 0")
+    server = win32ts.WTS_CURRENT_SERVER_HANDLE
+    user = win32ts.WTSQuerySessionInformation(server, session, win32ts.WTSUserName)
+    domain = win32ts.WTSQuerySessionInformation(server, session, win32ts.WTSDomainName)
+    if not user:
+        raise RuntimeError("Interactive Windows session has no user")
+    account = f"{domain}\\{user}" if domain else user
+    sid_obj, _domain, _type = win32security.LookupAccountName(None, account)
     return win32security.ConvertSidToStringSid(sid_obj)
 
 
@@ -136,6 +180,7 @@ def install_logon_task() -> bool:
     except Exception as e:
         log.error("Cannot resolve current user SID for logon task: %s", e)
         return False
+    command = escape(str(exe_path()))
 
     xml = f"""<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
@@ -176,7 +221,7 @@ def install_logon_task() -> bool:
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>{Path(exe_path()).as_posix().replace('/', '\\')}</Command>
+      <Command>{command}</Command>
     </Exec>
   </Actions>
 </Task>
@@ -204,8 +249,14 @@ def remove_logon_task() -> bool:
 
 
 def logon_task_exists() -> bool:
-    code, _, _ = _run(["schtasks", "/Query", "/TN", LOGON_TASK_NAME])
-    return code == 0
+    return _scheduled_task_valid(LOGON_TASK_NAME, "")
+
+
+def logon_task_matches_current_user() -> bool:
+    try:
+        return _scheduled_task_valid(LOGON_TASK_NAME, "", user_sid=_current_user_sid())
+    except Exception:
+        return False
 
 
 def add_startup_registry() -> bool:
@@ -222,6 +273,19 @@ def add_startup_registry() -> bool:
         return True
     except Exception as e:
         log.warning("registry persistence failed: %s", e)
+        return False
+
+
+def startup_registry_matches() -> bool:
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+            value, kind = winreg.QueryValueEx(key, "NovaBlock")
+        actual = os.path.normcase(os.path.abspath(str(value).strip().strip('"')))
+        expected = os.path.normcase(os.path.abspath(str(exe_path())))
+        return kind == winreg.REG_SZ and actual == expected
+    except (ImportError, OSError, ValueError):
         return False
 
 
@@ -308,4 +372,16 @@ def remove_startup_shortcut() -> bool:
 
 
 def startup_shortcut_present() -> bool:
-    return _shortcut_path(common=True).exists() or _shortcut_path(common=False).exists()
+    try:
+        import win32com.client  # type: ignore
+        shell = win32com.client.Dispatch("WScript.Shell")
+        expected = os.path.normcase(os.path.abspath(str(exe_path())))
+        for common in (True, False):
+            shortcut = _shortcut_path(common=common)
+            if shortcut.exists():
+                target = shell.CreateShortCut(str(shortcut)).Targetpath
+                if os.path.normcase(os.path.abspath(str(target))) == expected:
+                    return True
+    except Exception as exc:
+        log.warning("Cannot verify startup shortcut: %s", exc)
+    return False

@@ -18,7 +18,7 @@ import time
 from logging.handlers import RotatingFileHandler
 
 from . import config, blocker, persistence, single_instance, companion, recovery
-from .paths import HEARTBEAT_FILE, LOG_FILE, PROGRAM_DATA, ensure_dirs
+from .paths import HEARTBEAT_FILE, LOG_FILE, PROGRAM_DATA, ensure_dirs, secure_program_data
 
 
 def _load_embedded() -> tuple[str, str]:
@@ -106,14 +106,22 @@ def ensure_persistence() -> None:
     interactive task that may have just launched this very process.
     """
     log = logging.getLogger("novablock.persistence_check")
+    if recovery.shutdown_requested():
+        return
     _migrate_hosts_if_youtube_present()
-    for label, install in (
-        ("SYSTEM watchdog task", persistence.install_scheduled_task),
-        ("interactive app task", persistence.install_logon_task),
-        ("startup registry", persistence.add_startup_registry),
-        ("startup shortcut", persistence.add_startup_shortcut),
+    for label, valid, install in (
+        ("SYSTEM watchdog task", persistence.task_exists,
+         persistence.install_scheduled_task),
+        ("interactive app task", persistence.logon_task_matches_current_user,
+         persistence.install_logon_task),
+        ("startup registry", persistence.startup_registry_matches,
+         persistence.add_startup_registry),
+        ("startup shortcut", persistence.startup_shortcut_present,
+         persistence.add_startup_shortcut),
     ):
         try:
+            if valid() or recovery.shutdown_requested():
+                continue
             if not install():
                 log.error("Could not refresh %s", label)
         except Exception as e:
@@ -130,7 +138,6 @@ def run_app() -> None:
 
     log = logging.getLogger("novablock.main")
     companion_stop = companion.start_companion_supervision()
-    ensure_persistence()
 
     status = StatusWindow()
     status.root.withdraw()
@@ -184,6 +191,8 @@ def run_app() -> None:
 
     tray = Tray(on_open=show_status, on_quit_attempt=quit_attempt)
     tray.start()
+    threading.Thread(target=ensure_persistence, name="NovaBlockPersistenceRepair",
+                     daemon=True).start()
     try:
         status.root.mainloop()
     finally:
@@ -284,11 +293,19 @@ def run_diagnostic() -> int:
 
 def run_uninstall_check() -> int:
     from .gui import CodeDialog
+    from . import trusted_clock
     import tkinter as tk
 
     if not config.is_installed():
         return 0
-    remaining = config.uninstall_cooldown_remaining()
+    try:
+        remaining = config.uninstall_cooldown_remaining(verified=True)
+    except trusted_clock.ClockUnavailable:
+        ctypes.windll.user32.MessageBoxW(
+            0, "Heure HTTPS non vérifiable. La désinstallation reste verrouillée.",
+            "NovaBlock", 0x10,
+        )
+        return 1
     if remaining < 0:
         ctypes.windll.user32.MessageBoxW(
             0,
@@ -312,9 +329,16 @@ def run_uninstall_check() -> int:
     root.destroy()
     if not dlg.result:
         return 1
-    from . import crypto
     cfg = config.load()
-    if not crypto.verify_code(dlg.result, cfg.get("code_hash", "")):
+    try:
+        authorized = config.verify_current_code(dlg.result, cfg)
+    except trusted_clock.ClockUnavailable:
+        ctypes.windll.user32.MessageBoxW(
+            0, "Heure HTTPS non vérifiable. La désinstallation reste verrouillée.",
+            "NovaBlock", 0x10,
+        )
+        return 1
+    if not authorized:
         ctypes.windll.user32.MessageBoxW(0, "Code incorrect.", "NovaBlock", 0x10)
         return 1
     try:
@@ -366,6 +390,10 @@ def main() -> int:
         if not is_admin():
             log.error("Headless repair has no admin rights — aborting")
             return 1
+        try:
+            secure_program_data()
+        except Exception as exc:
+            log.error("Could not secure application data permissions: %s", exc)
         run_watchdog_headless()
         return 0
     session_id = current_session_id()
@@ -380,6 +408,11 @@ def main() -> int:
         log.warning("Not admin — re-launching with elevation")
         relaunch_as_admin()
         return 0
+    try:
+        secured = secure_program_data()
+        log.info("Application data permissions repaired on %d entries", secured)
+    except Exception as exc:
+        log.error("Could not secure application data permissions: %s", exc)
     if args.uninstall:
         return run_uninstall_check()
     if args.check:

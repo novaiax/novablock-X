@@ -10,9 +10,22 @@ from typing import Optional
 
 import requests
 
-from . import config, crypto, mailer, blocker, persistence, browser_policies
+from . import config, crypto, mailer, blocker, persistence, browser_policies, trusted_clock
 
 log = logging.getLogger("novablock.gui")
+
+
+def _verify_code_with_time(code: str, cfg: dict, parent: tk.Misc) -> bool | None:
+    try:
+        return config.verify_current_code(code, cfg)
+    except trusted_clock.ClockUnavailable:
+        messagebox.showerror(
+            "Heure non vérifiable",
+            "La vérification de l'heure par HTTPS est indisponible. "
+            "Le filtre reste actif ; réessaie quand Internet fonctionne.",
+            parent=parent,
+        )
+        return None
 
 
 def enable_dpi_awareness() -> None:
@@ -498,6 +511,7 @@ class SetupWizard:
 
     def _do_install(self) -> None:
         try:
+            verified_timestamp = int(trusted_clock.verified_now())
             self.root.after(0, lambda: self.install_status.config(text="Génération du code…"))
             code = crypto.generate_unlock_code()
             code_hash = crypto.hash_code(code)
@@ -527,8 +541,8 @@ class SetupWizard:
                 "friend_email": self.data["friend_email"],
                 "machine_name": self.data.get("machine_name", ""),
                 "code_hash": code_hash,
-                "install_ts": int(time.time()),
-                "code_rotation_ts": int(time.time()),
+                "install_ts": verified_timestamp,
+                "code_rotation_ts": verified_timestamp,
                 "resend_api_key": self.data["api_key"],
                 "from_email": self.data["from_email"],
             })
@@ -683,7 +697,7 @@ class StatusWindow:
             self.status_lbl.config(text="Non installé.", fg=PRIMARY)
             return
         if config.is_temp_unlocked():
-            remain = int(cfg["temp_unlock_until"] - time.time())
+            remain = max(0, int(cfg["temp_unlock_until"] - (trusted_clock.cached_now() or time.time())))
             h = remain // 3600
             m = (remain % 3600) // 60
             self.status_lbl.config(
@@ -704,6 +718,9 @@ class StatusWindow:
             d = cooldown // 86400
             h = (cooldown % 86400) // 3600
             cooldown_txt = f"\nDésinstallation : {d}j {h}h restantes"
+            self.cancel_uninstall_btn.pack(fill="x", pady=4)
+        elif cooldown == -2:
+            cooldown_txt = "\nDésinstallation : heure HTTPS à vérifier"
             self.cancel_uninstall_btn.pack(fill="x", pady=4)
         else:
             self.cancel_uninstall_btn.pack_forget()
@@ -729,6 +746,12 @@ class StatusWindow:
         threading.Thread(target=self._do_request_unlock, daemon=True).start()
 
     def _do_request_unlock(self) -> None:
+        try:
+            trusted_clock.verified_now()
+        except trusted_clock.ClockUnavailable:
+            self.root.after(0, lambda: self.feedback_lbl.config(
+                text="Heure HTTPS indisponible ; aucun nouveau code envoyé.", fg=PRIMARY))
+            return
         cfg = config.load()
         # Generate a FRESH code, replace the hash, then email the new code to the friend.
         new_code = crypto.generate_unlock_code()
@@ -759,7 +782,10 @@ class StatusWindow:
         self.root.wait_window(dlg.top)
         if dlg.result:
             cfg = config.load()
-            if crypto.verify_code(dlg.result, cfg.get("code_hash", "")):
+            authorized = _verify_code_with_time(dlg.result, cfg, self.root)
+            if authorized is None:
+                return
+            if authorized:
                 config.grant_temp_unlock(24)
                 blocker.remove_full_block()
                 self.feedback_lbl.config(text="✓ Code valide. Filtre désactivé pour 24h.", fg="#00b894")
@@ -777,7 +803,13 @@ class StatusWindow:
             "Continuer ?",
         ):
             return
-        config.start_uninstall_cooldown()
+        try:
+            config.start_uninstall_cooldown()
+        except trusted_clock.ClockUnavailable:
+            messagebox.showerror("Heure non vérifiable",
+                                 "Impossible de dater le début des 7 jours. Réessaie avec Internet.",
+                                 parent=self.root)
+            return
         cfg = config.load()
         mailer.send_uninstall_request(
             cfg.get("resend_api_key", ""),
@@ -859,7 +891,10 @@ class StatusWindow:
             if not code_dlg.result:
                 return
             current_cfg = config.load()
-            if not crypto.verify_code(code_dlg.result, current_cfg.get("code_hash", "")):
+            authorized = _verify_code_with_time(code_dlg.result, current_cfg, dlg)
+            if authorized is None:
+                return
+            if not authorized:
                 messagebox.showerror("Erreur", "Code incorrect.", parent=dlg)
                 return
             fields["friend_email"].config(state="normal", readonlybackground="white")
@@ -996,7 +1031,10 @@ class StatusWindow:
         if not code_dlg.result:
             return
         cfg = config.load()
-        if not crypto.verify_code(code_dlg.result, cfg.get("code_hash", "")):
+        authorized = _verify_code_with_time(code_dlg.result, cfg, self.root)
+        if authorized is None:
+            return
+        if not authorized:
             self.feedback_lbl.config(text="✗ Code incorrect.", fg=PRIMARY)
             return
 
@@ -1308,6 +1346,12 @@ class BlockedPopup:
         threading.Thread(target=self._do_request_email, daemon=True).start()
 
     def _do_request_email(self) -> None:
+        try:
+            trusted_clock.verified_now()
+        except trusted_clock.ClockUnavailable:
+            self.root.after(0, lambda: self.feedback.config(
+                text="Heure HTTPS indisponible ; aucun nouveau code envoyé.", fg=PRIMARY))
+            return
         cfg = config.load()
         new_code = crypto.generate_unlock_code()
         new_hash = crypto.hash_code(new_code)
@@ -1338,7 +1382,10 @@ class BlockedPopup:
         self.root.wait_window(dlg.top)
         if dlg.result:
             cfg = config.load()
-            if crypto.verify_code(dlg.result, cfg.get("code_hash", "")):
+            authorized = _verify_code_with_time(dlg.result, cfg, self.root)
+            if authorized is None:
+                return
+            if authorized:
                 config.grant_temp_unlock(24)
                 blocker.remove_full_block()
                 self.feedback.config(text="✓ Code valide. Filtre désactivé pour 24h.", fg="#00b894")

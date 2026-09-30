@@ -1,6 +1,8 @@
 """UC Browser cannot be used as an unmonitored browser."""
 
 import unittest
+import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -37,6 +39,30 @@ class UcBrowserGuardTests(unittest.TestCase):
             guard._loop()
         self.assertEqual(detected, [("UC Browser", "UC Browser non contrôlé", 99)])
         close.assert_called_once_with()
+
+    def test_renamed_uc_window_is_still_closed(self):
+        detected = []
+        guard = monitor.WindowMonitor(
+            on_detect=lambda title, keyword, hwnd: (detected.append(keyword), guard.stop()),
+        )
+        proc = SimpleNamespace(name=Mock(return_value="browser.exe"), kill=Mock())
+        with patch.object(monitor.win32gui, "GetForegroundWindow", return_value=99), \
+             patch.object(monitor.win32gui, "GetWindowText", return_value="Page - UC Browser"), \
+             patch.object(monitor.win32process, "GetWindowThreadProcessId", return_value=(0, 42)), \
+             patch.object(guard, "_is_uc_browser", return_value=False), \
+             patch.object(guard, "_is_browser", return_value=False), \
+             patch.object(monitor.psutil, "Process", return_value=proc), \
+             patch("novablock.config.is_temp_unlocked", return_value=False):
+            guard._loop()
+        self.assertEqual(detected, ["UC Browser non contrôlé"])
+        proc.kill.assert_called_once_with()
+
+    def test_browser_process_lists_do_not_drift(self):
+        source = (Path(__file__).resolve().parents[1] / "recovery_v134" /
+                  "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")
+        names = set(re.findall(r'"([a-z]+\.exe)":\s*\{\}', source))
+        self.assertTrue(monitor.BROWSER_PROCS.issubset(names))
+        self.assertTrue(set(browser_kill.BROWSERS).issubset(names))
 
 
 if __name__ == "__main__":

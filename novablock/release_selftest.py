@@ -5,6 +5,7 @@ The short-lived test process checks its own DACL and a uniquely named mutex.
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -28,6 +29,11 @@ def run(report_path: str) -> int:
         checks = result["checks"]
         checks["native_dependencies"] = bool(win32api.GetCurrentProcessId() and psutil.pid_exists(os.getpid()))
         checks["uia_dependencies"] = bool(comtypes and Desktop and monitor.HAS_UIA and monitor.Desktop)
+        helper = companion._bundled_helper_path()
+        checks["neutral_relay_embedded"] = helper.is_file()
+        if helper.is_file():
+            probe = subprocess.run([str(helper), "--probe"], timeout=10, capture_output=True)
+            checks["neutral_relay_probe"] = probe.returncode == 0
         old_name = single_instance.MUTEX_NAME
         single_instance.MUTEX_NAME = "Local\\NovaBlock_ReleaseTest_" + uuid.uuid4().hex
         try:

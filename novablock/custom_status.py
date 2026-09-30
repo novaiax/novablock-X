@@ -4,10 +4,10 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import config, crypto
+from . import config, recovery, trusted_clock
 from .gui import (
     StatusWindow as BaseStatusWindow,
-    CodeDialog,
+    CodeDialog, _verify_code_with_time,
     BG, ACCENT, MUTED, PRIMARY, FONT_LG, FONT_MD, FONT_SM, _center,
 )
 from .monitor import HAS_UIA
@@ -57,6 +57,11 @@ class StatusWindow(BaseStatusWindow):
             justify="left", anchor="w",
         )
         self.stats_lbl.pack(fill="x", pady=(5, 10))
+        self.recovery_lbl = tk.Label(
+            outer, text="", font=("Segoe UI", 9), fg=PRIMARY, bg=BG,
+            anchor="w", justify="left", wraplength=550,
+        )
+        self.recovery_lbl.pack(fill="x")
 
         unlock_row = tk.Frame(outer, bg=BG)
         unlock_row.pack(fill="x", pady=(0, 5))
@@ -201,9 +206,20 @@ class StatusWindow(BaseStatusWindow):
         if not cfg.get("install_ts"):
             self.status_lbl.config(text="Non installé", fg=PRIMARY)
             return
+        self.recovery_lbl.config(
+            text="" if recovery.fast_layer_healthy() else
+                 "⚠ Relance rapide indisponible : service arrêté ou bloqué par Windows."
+        )
+        if cfg.get("_config_unreadable"):
+            self.status_lbl.config(text="⚠ Configuration illisible — filtre maintenu", fg=PRIMARY)
+            self.stats_lbl.config(text="La configuration doit être réparée avant toute modification.")
+            self._refresh_custom_sites_panel()
+            self._refresh_job = self.root.after(5000, self._refresh)
+            return
 
         if config.is_temp_unlocked():
-            remain = max(0, int(cfg.get("temp_unlock_until", 0) - time.time()))
+            remain = max(0, int(cfg.get("temp_unlock_until", 0) -
+                                (trusted_clock.cached_now() or time.time())))
             h = remain // 3600
             m = (remain % 3600) // 60
             self.status_lbl.config(text=f"⚠ Débloqué {h}h{m:02d}", fg=PRIMARY)
@@ -221,6 +237,10 @@ class StatusWindow(BaseStatusWindow):
             d = cooldown // 86400
             h = (cooldown % 86400) // 3600
             cooldown_txt = f"  •  Désinstallation : {d}j {h}h"
+            if not self.cancel_uninstall_btn.winfo_manager():
+                self.cancel_uninstall_btn.pack(fill="x", pady=(5, 0))
+        elif cooldown == -2:
+            cooldown_txt = "  •  Désinstallation : heure HTTPS à vérifier"
             if not self.cancel_uninstall_btn.winfo_manager():
                 self.cancel_uninstall_btn.pack(fill="x", pady=(5, 0))
         else:
@@ -302,7 +322,10 @@ class StatusWindow(BaseStatusWindow):
         if not code_dlg.result:
             return
         cfg = config.load()
-        if not crypto.verify_code(code_dlg.result, cfg.get("code_hash", "")):
+        authorized = _verify_code_with_time(code_dlg.result, cfg, self.root)
+        if authorized is None:
+            return
+        if not authorized:
             self.feedback_lbl.config(text="✗ Code incorrect.", fg=PRIMARY)
             return
 

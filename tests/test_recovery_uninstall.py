@@ -31,7 +31,7 @@ class UninstallGuardTests(unittest.TestCase):
              patch.object(main.config, "load", return_value={"code_hash": "stored"}), \
              patch("tkinter.Tk", return_value=root), \
              patch.object(gui, "CodeDialog", return_value=dialog), \
-             patch("novablock.crypto.verify_code", return_value=False), \
+             patch.object(main.config, "verify_current_code", return_value=False), \
              patch.object(main.ctypes.windll.user32, "MessageBoxW"), \
              patch.object(main.blocker, "remove_full_block") as remove, \
              patch.object(main.persistence, "remove_scheduled_task") as remove_task:

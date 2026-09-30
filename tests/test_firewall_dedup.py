@@ -140,6 +140,7 @@ class FirewallDuplicatePlannerTests(unittest.TestCase):
                  patch.object(main, "setup_logging"), \
                  patch.object(main, "current_session_id", return_value=1), \
                  patch.object(main, "is_admin", return_value=True), \
+                 patch.object(main, "secure_program_data", return_value=0), \
                  patch.object(main, "PROGRAM_DATA", Path(temporary)), \
                  patch.object(firewall, "block_doh_endpoints") as apply, \
                  patch.object(firewall, "repair_duplicate_rules_registry", return_value=report):

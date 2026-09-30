@@ -12,17 +12,27 @@ from .paths import PROGRAM_DATA, SHUTDOWN_SENTINEL, LOGON_TASK_NAME
 log = logging.getLogger("novablock.recovery")
 MAINTENANCE_MAX_AGE = 1800
 UPDATE_LOCK = PROGRAM_DATA / "update.lock"
+RECOVERY_HEARTBEAT = PROGRAM_DATA / "recovery_v134.heartbeat"
+
+
+def fast_layer_healthy() -> bool:
+    """A stale heartbeat exposes quarantine or a stopped recovery service."""
+    try:
+        age = time.time() - RECOVERY_HEARTBEAT.stat().st_mtime
+        return -5 <= age <= 2
+    except OSError:
+        return False
 
 
 def _recent_marker(path: Path) -> bool:
     try:
         age = time.time() - path.stat().st_mtime
-        return -MAINTENANCE_MAX_AGE < age < MAINTENANCE_MAX_AGE
+        return -5 <= age < MAINTENANCE_MAX_AGE
     except FileNotFoundError:
         return False
     except OSError:
-        # Do not race a legitimate update whose marker cannot be read.
-        return True
+        # An unreadable marker is not authority to stop recovery.
+        return False
 
 
 def shutdown_requested() -> bool:

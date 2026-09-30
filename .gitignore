@@ -20,8 +20,10 @@ build/
 build-staging/
 dist/
 dist-release/
+dist-audit/
 dist-staging/
 *.spec.bak
+*.syso
 
 # Editor
 .vscode/

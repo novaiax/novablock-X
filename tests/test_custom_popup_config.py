@@ -19,7 +19,8 @@ class CustomPopupConfigTests(unittest.TestCase):
             def exists(self):
                 return False
 
-        with patch.object(config, "CONFIG_FILE", MissingConfig()):
+        with patch.object(config, "CONFIG_FILE", MissingConfig()), \
+             patch.object(config, "_prior_install_present", return_value=False):
             fresh = config.load()
             self.assertEqual(set(fresh["custom_popup_domains"]), expected)
             self.assertEqual(len(fresh["custom_popup_domains"]), 17)
