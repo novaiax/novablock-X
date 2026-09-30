@@ -46,6 +46,8 @@ def secure_program_data() -> int:
     import win32security  # type: ignore
 
     ensure_dirs()
+    if getattr(PROGRAM_DATA.lstat(), "st_file_attributes", 0) & 0x400:
+        raise RuntimeError("Application data directory is a reparse point")
     root = PROGRAM_DATA.resolve(strict=True)
     admin = win32security.ConvertStringSidToSid("S-1-5-32-544")
     system = win32security.ConvertStringSidToSid("S-1-5-18")

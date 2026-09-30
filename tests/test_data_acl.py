@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import win32security
@@ -11,6 +12,15 @@ from novablock import paths
 
 
 class DataAclTests(unittest.TestCase):
+    def test_root_reparse_point_is_rejected_before_any_acl_change(self):
+        with patch.object(paths, "ensure_dirs"), \
+             patch.object(paths, "PROGRAM_DATA") as root, \
+             patch.object(win32security, "SetNamedSecurityInfo") as setter:
+            root.lstat.return_value = SimpleNamespace(st_file_attributes=0x400)
+            with self.assertRaises(RuntimeError):
+                paths.secure_program_data()
+            setter.assert_not_called()
+
     def test_every_existing_entry_gets_only_admin_and_system_full_control(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "state"
