@@ -42,7 +42,7 @@ def send_tamper_alert(reason: str, detail: str = "") -> bool:
     Per user policy: only ACTUAL deactivation attempts trigger an email.
     Auto-recoverable maintenance events (the watchdog noticed hosts/DNS/
     policies/firewall got removed and put them back) are logged but no
-    longer spam Cyril — they fire whenever EMERGENCY_RESET runs, when an
+    longer spam Cyril — they can occur during maintenance, when an
     OS update touches scheduled tasks, when a browser update wipes
     policies temporarily, etc. The legitimate code-request flow (user
     clicks 'Demander le code') sends through mailer.py, not here.
@@ -132,7 +132,7 @@ DNS_FAILSAFE = "dns_failsafe_dhcp_fallback"
 #     of the 25-char code, also a deliberate attempt.
 # Everything else (HOSTS_REMOVED, DNS_REVERTED, POLICIES_REMOVED, etc.)
 # is a maintenance event the watchdog auto-recovers from within seconds.
-# Those fire on legitimate side-effects (EMERGENCY_RESET, OS updates,
+# Those fire on legitimate side-effects (maintenance, OS updates,
 # browser-policy refresh by Windows, an antivirus quarantining a temp
 # file) and were spamming Cyril for no real signal.
 ALLOWED_ALERT_REASONS = {

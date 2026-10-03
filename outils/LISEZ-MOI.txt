@@ -14,11 +14,6 @@ update.exe
     Installe ou repare la couche de recuperation v1.0.37. Son etat peut etre
     verifie apres l'installation.
 
-EMERGENCY_RESET.bat / EMERGENCY_RESET.ps1
-    Dernier recours lorsque NovaBlock ou le reseau est inutilisable.
-    Necessite l'UAC, une saisie manuelle de 200 caracteres et une heure
-    verifiee hors de la plage 19 h - 6 h (Paris). Affiche et conserve le journal.
-
 REACTIVATE.bat / REACTIVATE.ps1
     Verifie et remet en route les protections, la tache interactive et le
     mecanisme de recuperation.

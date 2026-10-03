@@ -115,16 +115,6 @@ class ReleaseV137Tests(unittest.TestCase):
         self.assertIn("https://example.com", reactivate)
         self.assertNotIn("9.9.9.11", reactivate)
 
-    def test_emergency_reset_preserves_all_gates(self):
-        emergency = (ROOT / "outils" / "EMERGENCY_RESET.ps1").read_text(encoding="utf-8", errors="replace")
-        self.assertIn("while ($chars.Count -lt 200)", emergency)
-        self.assertIn("$saisie.MaxLength   = 200", emergency)
-        self.assertIn("$saisie.ShortcutsEnabled = $false", emergency)
-        self.assertIn("Test-FenetreBloquee", emergency)
-        self.assertIn("$btn.Add_Click({\n    if (-not [string]::Equals", emergency.replace("\r\n", "\n"))
-        self.assertIn("$script:logFile", emergency)
-        self.assertIn("--maintenance-pause", emergency)
-
     def test_network_repairs_keep_the_filter_active(self):
         unstick = (ROOT / "outils" / "unstick_sockets.ps1").read_text(encoding="utf-8").lower()
         internet = (ROOT / "outils" / "REPARE_INTERNET.ps1").read_text(encoding="utf-8").lower()
@@ -154,7 +144,7 @@ class ReleaseV137Tests(unittest.TestCase):
         self.assertNotIn("Copy-Item outils/*", package)
         listed = set(re.findall(r"^\s+'([^']+)'", package, flags=re.MULTILINE))
         self.assertEqual(listed, {
-            "LISEZ-MOI.txt", "EMERGENCY_RESET.bat", "EMERGENCY_RESET.ps1",
+            "LISEZ-MOI.txt",
             "REACTIVATE.bat", "REACTIVATE.ps1", "REPARE_INTERNET.ps1",
             "MESURE_BOOT.ps1", "unstick_sockets.bat", "unstick_sockets.ps1",
             "whitelist_site.bat", "whitelist_site.ps1",
@@ -162,13 +152,12 @@ class ReleaseV137Tests(unittest.TestCase):
         })
         self.assertNotIn("rollback_1.33.exe", wf)
 
-    def test_docs_record_startup_fix_and_release_gate(self):
+    def test_docs_keep_downloads_and_release_gate(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
         notes = (ROOT / "RELEASE_NOTES.md").read_text(encoding="utf-8")
 
-        self.assertIn("session Windows 0", readme)
-        self.assertIn("**v1.0.37**", readme)
-        self.assertIn("update.bat --local", readme)
+        self.assertIn("https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe", readme)
+        self.assertIn("https://github.com/novaiax/novablock-X/releases/latest/download/update.bat", readme)
         self.assertIn("78 règles", notes)
         self.assertIn("publication manuelle", notes)
 

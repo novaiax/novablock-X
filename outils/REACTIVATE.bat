@@ -1,11 +1,11 @@
 @echo off
 REM ============================================================
-REM NovaBlock - REACTIVATE (reverses EMERGENCY_RESET)
+REM NovaBlock - REACTIVATE (restores protection after repair)
 REM ============================================================
 REM Turns Windows Firewall back ON, re-enables NovaBlock scheduled
 REM tasks, and launches NovaBlock.exe which then re-arms hosts,
 REM DNS, firewall rules, and browser policies via its in-process
-REM watchdog. Mirror image of EMERGENCY_RESET.bat.
+REM watchdog.
 REM ============================================================
 
 setlocal

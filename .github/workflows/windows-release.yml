@@ -66,7 +66,7 @@ jobs:
       - name: Parse PowerShell recovery tools
         run: |
           foreach ($name in @(
-            'EMERGENCY_RESET.ps1', 'REACTIVATE.ps1', 'REPARE_INTERNET.ps1',
+            'REACTIVATE.ps1', 'REPARE_INTERNET.ps1',
             'unstick_sockets.ps1', 'whitelist_site.ps1', 'MESURE_BOOT.ps1'
           )) {
             $path = Join-Path outils $name
@@ -77,15 +77,6 @@ jobs:
             ) | Out-Null
             if ($errors.Count) { throw "PowerShell parse failed: $name" }
           }
-          $resetSource = Get-Content outils/EMERGENCY_RESET.ps1 -Raw
-          $embedded = [regex]::Match($resetSource, "(?s)= @'\r?\n(.*?)\r?\n'@")
-          if (-not $embedded.Success) { throw 'Embedded emergency script missing' }
-          $tokens = $null
-          $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseInput(
-            $embedded.Groups[1].Value, [ref]$tokens, [ref]$errors
-          ) | Out-Null
-          if ($errors.Count) { throw 'Embedded emergency script parse failed' }
 
       - name: Validate recovery layer source
         working-directory: recovery_v134
@@ -148,8 +139,6 @@ jobs:
           New-Item -ItemType Directory -Force -Path $toolStage | Out-Null
           $safeTools = @(
             'LISEZ-MOI.txt',
-            'EMERGENCY_RESET.bat',
-            'EMERGENCY_RESET.ps1',
             'REACTIVATE.bat',
             'REACTIVATE.ps1',
             'REPARE_INTERNET.ps1',
