@@ -39,3 +39,6 @@ Thumbs.db
 secrets/
 *.key
 novablock/_keys.py
+
+# Local recovery scripts kept outside the public repository and releases
+/outils/EMERGENCY_RESET.*
