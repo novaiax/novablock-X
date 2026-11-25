@@ -10,6 +10,12 @@ NovaBlock est une application Windows qui aide à éviter les contenus adultes e
 - **Protection en arrière-plan** avec démarrage Windows et relance automatique en cas d'interruption.
 - **Personne de confiance** : le code de déblocage est confié à un proche pour t'aider à respecter ton engagement.
 
+## Télécharger NovaBlock
+
+- **Nouvelle installation** : [télécharger NovaBlock.exe](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe).
+- **Mise à jour d’un PC déjà équipé** : [télécharger update.bat](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat).
+- [Version officielle, notes et empreintes SHA-256](https://github.com/novaiax/novablock-X/releases/latest).
+
 ## Installer NovaBlock
 
 1. Télécharge [NovaBlock.exe](https://github.com/novaiax/novablock-X/releases/latest/download/NovaBlock.exe).
@@ -18,7 +24,7 @@ NovaBlock est une application Windows qui aide à éviter les contenus adultes e
 
 ## Mettre à jour
 
-Télécharge uniquement [update.bat](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat), double-clique dessus et accepte la demande de droits administrateur. Il récupère la dernière version et conserve tes réglages. Le résultat s'affiche à la fin.
+Télécharge uniquement [update.bat](https://github.com/novaiax/novablock-X/releases/latest/download/update.bat), suis la procédure de maintenance avec ta personne de confiance et accepte la demande de droits administrateur. Il récupère la dernière version et conserve tes réglages. Le résultat s'affiche à la fin.
 
 Les téléchargements officiels sont disponibles dans les [releases GitHub](https://github.com/novaiax/novablock-X/releases/latest).
 
