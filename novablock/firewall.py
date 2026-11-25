@@ -29,6 +29,7 @@ of `netsh advfirewall firewall add rule`. Two reasons:
 import logging
 import subprocess
 from datetime import datetime, timezone
+from ipaddress import ip_address, ip_network
 
 from .paths import PROGRAM_DATA
 
@@ -133,17 +134,28 @@ def _snapshot_existing_names(fw) -> set[str]:
     return _snapshot_existing(fw)[0]
 
 
+def _is_single_endpoint(address: str, remote_ip: str) -> bool:
+    """Accept Windows' different formats for exactly one IP address."""
+    expected = ip_address(remote_ip)
+    address = address.strip()
+    try:
+        if "-" in address:
+            first, last = address.split("-", 1)
+            return ip_address(first) == ip_address(last) == expected
+        if "/" in address:
+            network = ip_network(address)
+            return network.num_addresses == 1 and network.network_address == expected
+        return ip_address(address) == expected
+    except ValueError:
+        return False
+
+
 def _rule_matches(rule, protocol: int, port: str, remote_ip: str) -> bool:
-    address = str(rule.RemoteAddresses).lower()
-    expected = remote_ip.lower()
-    equivalents = {expected, f"{expected}-{expected}"}
-    if ":" not in remote_ip:
-        equivalents.add(f"{expected}/255.255.255.255")
     return bool(
         rule.Enabled and rule.Action == NET_FW_ACTION_BLOCK
         and rule.Direction == NET_FW_RULE_DIR_OUT
         and rule.Protocol == protocol and str(rule.RemotePorts) == port
-        and address in equivalents
+        and _is_single_endpoint(str(rule.RemoteAddresses), remote_ip)
     )
 
 
@@ -179,18 +191,13 @@ def _registry_rule_fields(raw: str) -> dict[str, str]:
 def _valid_registry_rule(fields: dict[str, str], spec: tuple[int, str, str]) -> bool:
     protocol, port, address = spec
     address_field = "RA6" if ":" in address else "RA4"
-    actual_address = fields.get(address_field, "").lower()
-    expected_address = address.lower()
-    equivalent_addresses = {expected_address, f"{expected_address}-{expected_address}"}
-    if address_field == "RA4":
-        equivalent_addresses.add(f"{expected_address}/255.255.255.255")
     return (
         fields.get("Action") == "Block"
         and fields.get("Active") == "TRUE"
         and fields.get("Dir") == "Out"
         and fields.get("Protocol") == str(protocol)
         and fields.get("RPort") == port
-        and actual_address in equivalent_addresses
+        and _is_single_endpoint(fields.get(address_field, ""), address)
     )
 
 

@@ -1,6 +1,19 @@
 # PyInstaller spec for NovaBlock
 # Build: pyinstaller novablock.spec --clean
 
+from PyInstaller.utils.hooks.tcl_tk import tcltk_info
+
+# A successful link alone is insufficient: some Windows Python runtimes expose
+# Tcl/Tk resources only through Tcl's virtual filesystem, which the hook
+# cannot copy. Fail the build instead of shipping an exe that won't open.
+gui_files = {destination.replace("\\", "/") for destination, _, _ in tcltk_info.data_files}
+missing_gui_files = {"_tcl_data/init.tcl", "_tk_data/tk.tcl"} - gui_files
+if missing_gui_files:
+    raise SystemExit(
+        "Cannot package Tcl/Tk resources: " + ", ".join(sorted(missing_gui_files))
+        + ". Use the Windows Python 3.12 release runtime with Tcl/Tk installed."
+    )
+
 block_cipher = None
 
 a = Analysis(

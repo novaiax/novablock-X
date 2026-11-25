@@ -11,11 +11,44 @@ import time
 import traceback
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+
+def _check_firewall_detection() -> bool:
+    """Exercise the packaged rule check without touching the live firewall."""
+    from . import firewall
+
+    rules = {
+        name: SimpleNamespace(
+            Enabled=True,
+            Action=firewall.NET_FW_ACTION_BLOCK,
+            Direction=firewall.NET_FW_RULE_DIR_OUT,
+            Protocol=protocol,
+            RemotePorts=port,
+            RemoteAddresses=(
+                address if ":" in address else f"{address}/255.255.255.255"
+            ),
+        )
+        for name, protocol, port, address in firewall._rule_specs()
+    }
+    policy = SimpleNamespace(Rules=SimpleNamespace(Item=rules.__getitem__))
+    # On French Windows, netsh reports "Activé : Oui". The packaged watchdog
+    # must use structured rule properties regardless of the display language.
+    with patch.object(firewall, "_get_fw_policy", return_value=policy), patch.object(
+        subprocess, "Popen", side_effect=AssertionError("Firewall check must not launch a command")
+    ) as spawn:
+        all_present = firewall.doh_blocked()
+        rules.pop(next(reversed(rules)))
+        missing_detected = not firewall.doh_blocked()
+        return all_present and missing_detected and not spawn.called
 
 
 def run(report_path: str) -> int:
+    from . import __version__
+
     result = {"ok": False, "checks": {}, "pid": os.getpid(),
-              "packaged_dir": getattr(sys, "_MEIPASS", "")}
+              "version": __version__, "packaged_dir": getattr(sys, "_MEIPASS", "")}
     report = Path(report_path)
     child_flag = "NOVABLOCK_RELEASE_TEST_CHILD"
     try:
@@ -29,6 +62,7 @@ def run(report_path: str) -> int:
         checks = result["checks"]
         checks["native_dependencies"] = bool(win32api.GetCurrentProcessId() and psutil.pid_exists(os.getpid()))
         checks["uia_dependencies"] = bool(comtypes and Desktop and monitor.HAS_UIA and monitor.Desktop)
+        checks["firewall_detection_is_language_independent"] = _check_firewall_detection()
         helper = companion._bundled_helper_path()
         checks["neutral_relay_embedded"] = helper.is_file()
         if helper.is_file():
