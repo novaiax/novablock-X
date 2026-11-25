@@ -61,6 +61,30 @@ class FirewallDuplicatePlannerTests(unittest.TestCase):
             f"RA6={address}|", f"RA6={address}-{address}|"))
         self.assertEqual(firewall._plan_registry_cleanup(self.records), ([], [], 78))
 
+    def test_windows_address_formats_preserve_only_exact_endpoints(self):
+        for displayed, expected, matches in (
+            ("1.1.1.1/32", "1.1.1.1", True),
+            ("2001:4860:4860:0:0:0:0:8888/128", "2001:4860:4860::8888", True),
+            ("2001:4860:4860::8888-2001:4860:4860:0:0:0:0:8888", "2001:4860:4860::8888", True),
+            ("1.1.1.0/24", "1.1.1.1", False),
+            ("1.1.1.1-1.1.1.2", "1.1.1.1", False),
+            ("1.1.1.1,8.8.8.8", "1.1.1.1", False),
+        ):
+            with self.subTest(displayed=displayed):
+                rule = SimpleNamespace(
+                    Enabled=True, Action=firewall.NET_FW_ACTION_BLOCK,
+                    Direction=firewall.NET_FW_RULE_DIR_OUT, Protocol=6,
+                    RemotePorts="443", RemoteAddresses=displayed,
+                )
+                self.assertEqual(firewall._rule_matches(rule, 6, "443", expected), matches)
+                record = _record("example", 6, "443", displayed)
+                self.assertEqual(
+                    firewall._valid_registry_rule(
+                        firewall._registry_rule_fields(record), (6, "443", expected)
+                    ),
+                    matches,
+                )
+
     def test_required_gap_prevents_all_deletion(self):
         self.records.pop()
         self.records.append(("duplicate", self.records[0][1]))

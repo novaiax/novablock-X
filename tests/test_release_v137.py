@@ -2,12 +2,14 @@ from pathlib import Path
 import re
 import unittest
 
+from novablock import __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseV137Tests(unittest.TestCase):
     def test_release_version(self):
-        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), "v1.0.37")
+        self.assertEqual((ROOT / "RELEASE_VERSION").read_text().strip(), f"v{__version__}")
 
     def test_recovery_fast_path_contract(self):
         src = (ROOT / "recovery_v134" / "cmd" / "recovery" / "main_windows.go").read_text(encoding="utf-8")

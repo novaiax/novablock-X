@@ -1,3 +1,11 @@
+# NovaBlock v1.0.38 — contrôle du pare-feu indépendant de la langue
+
+Sur certains PC, un ancien binaire pouvait chercher `Enabled: Yes` dans la sortie de Windows et conclure que les règles manquaient quand le système affichait `Activé : Oui`. Il recréait alors les 78 règles à chaque cycle de surveillance.
+
+- Le contrôle utilise les propriétés du pare-feu Windows. Il reconnaît les différentes écritures d’une même adresse IPv4 ou IPv6, sans accepter une plage plus large.
+- L’autotest de l’exécutable vérifie que les 78 règles actives sont reconnues sans lancer de commande, et qu’une règle manquante reste détectée.
+- Le DNS Family, le jeu de 78 règles et la couche de récupération restent les mêmes.
+
 # NovaBlock v1.0.37 — relance locale et audit de protection
 
 La mise à jour se fait toujours avec un seul fichier à télécharger : `update.bat`. Les 17 sites popup par défaut, hors Reddit, et les 78 règles DoH requises sont conservés depuis la v1.0.36.
